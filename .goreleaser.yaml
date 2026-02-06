@@ -1,0 +1,114 @@
+project_name: stellar
+version: 2
+
+# Pre-build hooks
+before:
+  hooks:
+    - go mod tidy
+    - go mod download
+
+# Build configuration
+builds:
+  - id: stellar
+    binary: stellar
+    main: ./main.go
+    goos:
+      - linux
+      - darwin
+      # No windows - symlinks not supported well
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+# Archive configuration
+archives:
+  - id: stellar
+    name_template: "stellar_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+    files:
+      - README.md
+      - LICENSE
+
+# Checksums
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+# Homebrew tap (optional - for macOS users)
+brews:
+  - name: stellar
+    repository:
+      owner: a3chron
+      name: homebrew-tap
+      token: "{{ .Env.GITHUB_TOKEN }}"
+    homepage: "https://github.com/a3chron/stellar"
+    description: "Starship theme manager - discover, preview, and apply themes"
+    license: MIT
+    install: |
+      bin.install "stellar"
+    test: |
+      system "#{bin}/stellar", "--version"
+
+# Linux packages
+nfpms:
+  - id: stellar
+    package_name: stellar
+    vendor: a3chron
+    homepage: "https://github.com/a3chron/stellar"
+    maintainer: "Kurt Schambach <kurt.schambach@gmail.com>"
+    description: "Starship theme manager - discover, preview, and apply themes from the community"
+    license: MIT
+    formats:
+      - deb
+      - rpm
+      - apk
+    bindir: /usr/bin
+
+# GitHub release configuration
+release:
+  github:
+    owner: a3chron
+    name: stellar
+  draft: false
+  prerelease: auto
+  mode: replace
+  header: "## ✳ Stellar {{ .Tag }}"
+  footer: |
+    ---
+    
+    **Full Changelog**: https://github.com/a3chron/stellar/compare/{{ .PreviousTag }}...{{ .Tag }}
+    
+    Released by [GoReleaser](https://github.com/goreleaser/goreleaser) ⚡
+
+# Changelog
+changelog:
+  use: github
+  sort: asc
+  abbrev: 7
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+      - "Merge pull request"
+      - "Merge branch"
+  groups:
+    - title: "Features"
+      regexp: "^feat(\\([a-zA-Z0-9_-]+\\))?(!)?:\\s(.+)"
+      order: 0
+    - title: "Bug Fixes"
+      regexp: "^fix(\\([a-zA-Z0-9_-]+\\))?(!)?:\\s(.+)"
+      order: 1
+    - title: "Documentation"
+      regexp: "^docs(\\([a-zA-Z0-9_-]+\\))?(!)?:\\s(.+)"
+      order: 2
+    - title: "Others"
+      order: 999

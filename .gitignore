@@ -7,6 +7,7 @@
 *.dll
 *.so
 *.dylib
+stellar
 
 # Test binary, built with `go test -c`
 *.test
@@ -30,3 +31,5 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+# Added by goreleaser init:
+dist/
