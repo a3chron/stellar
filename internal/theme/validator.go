@@ -24,7 +24,7 @@ func ValidateConfigContent(content string) error {
 		return fmt.Errorf("invalid TOML: %w", err)
 	}
 
-	// 2. Check for custom commands (security risk)
+	// 2. Check for custom commands (security risk) TODO: just display a warning in this case, ask to proced, default *No*
 	if custom, ok := config["custom"]; ok {
 		customMap, ok := custom.(map[string]interface{})
 		if ok && len(customMap) > 0 {

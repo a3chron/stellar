@@ -40,7 +40,7 @@ var removeCmd = &cobra.Command{
 			color.Yellow("Cannot remove currently active theme: %s", themeID)
 			fmt.Println("\nOptions:")
 			fmt.Println("  1. Apply a different theme first")
-			fmt.Println("  2. Use --force to remove anyway (not recommended)")
+			fmt.Println("  2. Use --force to remove anyway (why would one do that? for the sake of the force?)")
 			return nil
 		}
 
@@ -68,7 +68,7 @@ var removeCmd = &cobra.Command{
 			cfg.CurrentTheme = ""
 			cfg.CurrentPath = ""
 			cfg.Save()
-			color.Yellow("\nYou removed the active theme. Apply a new one with: stellar apply <author/theme>")
+			color.Yellow("\nYou removed the active theme. Apply a new one with: stellar apply <author>/<theme>")
 		}
 
 		return nil

@@ -39,7 +39,7 @@ var listCmd = &cobra.Command{
 			isCurrent := theme == cfg.CurrentTheme
 
 			if isCurrent {
-				color.Green("  ✓ %s (current)", theme)
+				color.Green("  ✳ %s (current)", theme)
 			} else {
 				fmt.Printf("    %s\n", theme)
 			}

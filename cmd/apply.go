@@ -75,7 +75,6 @@ var applyCmd = &cobra.Command{
 		}
 
 		color.Green("Applied %s", t)
-		fmt.Println("\nRestart your shell or run: exec $SHELL")
 		return nil
 	},
 }

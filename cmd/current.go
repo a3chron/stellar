@@ -46,7 +46,7 @@ var currentCmd = &cobra.Command{
 		}
 
 		// All good - display current theme
-		color.Green("✓ Current Theme")
+		color.Green("Current Theme")
 		fmt.Println()
 		fmt.Printf("  Theme:  %s\n", cfg.CurrentTheme)
 		fmt.Printf("  Path:   %s\n", cfg.CurrentPath)
@@ -55,7 +55,6 @@ var currentCmd = &cobra.Command{
 		// Show symlink info
 		starshipConfig, _ := symlink.StarshipConfigPath()
 		fmt.Printf("  Starship config: %s\n", starshipConfig)
-		fmt.Printf("  → %s\n", target)
 
 		return nil
 	},

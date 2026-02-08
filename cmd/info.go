@@ -37,12 +37,12 @@ var infoCmd = &cobra.Command{
 		fmt.Println()
 
 		// Basic info
-		fmt.Printf("Author:       %s\n", info.Author)
+		fmt.Printf("Author:       %s\n", info.Author.Name)
 		fmt.Printf("Slug:         %s\n", info.Slug)
 		if info.Description != "" {
 			fmt.Printf("Description:  %s\n", info.Description)
 		}
-		fmt.Printf(" Downloads:    %d\n", info.Downloads)
+		fmt.Printf("Downloads:    %d\n", info.Downloads)
 		fmt.Println()
 
 		// Versions
@@ -56,7 +56,7 @@ var infoCmd = &cobra.Command{
 		}
 		fmt.Println()
 
-		// Dependencies (from latest version)
+		// Dependencies (from latest version) TODO: allow info for exact version as well
 		if len(info.Versions) > 0 && len(info.Versions[0].Dependencies) > 0 {
 			color.Yellow("Dependencies:")
 			for _, dep := range info.Versions[0].Dependencies {
