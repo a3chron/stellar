@@ -87,3 +87,4 @@ and check for lint errors with `golangci-lint run` (included in the flake).
 - make sure this works for just local themes as well, i.e. a user can save his own themes in .config/stellar/username/my-config-01
 - add docs for editing themes, i.e. copy theme directory into own local user directory, switch to local version, edit it
 - add hot reload for developing themes / a reload comand (altough, should work with symlink? need to test)
+- Add alias command, to use for example 'stellar apply blue' instead of 'stellar apply a3chron/ctp-blue'
