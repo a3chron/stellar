@@ -64,7 +64,9 @@ func (c *Client) FetchThemeConfig(author, name, version string) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch theme: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("server returned %d", resp.StatusCode)
@@ -85,7 +87,9 @@ func (c *Client) GetThemeInfo(author, name string) (*ThemeInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("theme not found")
@@ -109,7 +113,9 @@ func (c *Client) IncrementDownloadCount(author, name string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	return nil
 }

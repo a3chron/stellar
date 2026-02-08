@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"runtime"
@@ -35,7 +36,9 @@ var updateCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to download: %w", err)
 		}
-		defer resp.Body.Close()
+		defer func() {
+			_ = resp.Body.Close()
+		}()
 
 		if resp.StatusCode != http.StatusOK {
 			return fmt.Errorf("no update available")
@@ -46,12 +49,18 @@ var updateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		defer os.Remove(tmpFile.Name())
+		defer func() {
+			if err := os.Remove(tmpFile.Name()); err != nil {
+				log.Printf("failed to remove temp file: %v", err)
+			}
+		}()
 
 		if _, err := io.Copy(tmpFile, resp.Body); err != nil {
 			return err
 		}
-		tmpFile.Close()
+		if err := tmpFile.Close(); err != nil {
+			log.Printf("warning: failed to close temp file: %v", err)
+		}
 
 		// Get current executable path
 		execPath, err := os.Executable()

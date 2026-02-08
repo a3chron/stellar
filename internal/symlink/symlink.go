@@ -1,6 +1,7 @@
 package symlink
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 )
@@ -20,7 +21,9 @@ func CreateSymlink(target string) error {
 	}
 
 	// Remove existing symlink/file
-	os.Remove(configPath)
+	if err := os.Remove(configPath); err != nil {
+		log.Printf("warning: failed to remove %s: %v", configPath, err)
+	}
 
 	// Create new symlink
 	return os.Symlink(target, configPath)

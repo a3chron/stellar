@@ -67,7 +67,9 @@ var removeCmd = &cobra.Command{
 		if themeID == cfg.CurrentTheme {
 			cfg.CurrentTheme = ""
 			cfg.CurrentPath = ""
-			cfg.Save()
+			if err := cfg.Save(); err != nil {
+				return fmt.Errorf("failed to save config: %w", err)
+			}
 			color.Yellow("\nYou removed the active theme. Apply a new one with: stellar apply <author>/<theme>")
 		}
 

@@ -52,7 +52,9 @@ var previewCmd = &cobra.Command{
 		// Create temporary config for preview
 		tempConfig := filepath.Join(os.TempDir(), "stellar-preview.toml")
 		content, _ := os.ReadFile(themePath)
-		os.WriteFile(tempConfig, content, 0644)
+		if err := os.WriteFile(tempConfig, content, 0644); err != nil {
+			return fmt.Errorf("failed to write temp config: %w", err)
+		}
 
 		// Spawn new shell with custom STARSHIP_CONFIG
 		shell := os.Getenv("SHELL")

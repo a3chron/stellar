@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/a3chron/stellar/internal/api"
 	"github.com/a3chron/stellar/internal/cache"
@@ -45,7 +46,11 @@ var applyCmd = &cobra.Command{
 			}
 
 			// Increment download count (fire and forget)
-			go client.IncrementDownloadCount(t.Author, t.Name)
+			go func() {
+				if err := client.IncrementDownloadCount(t.Author, t.Name); err != nil {
+					log.Printf("failed to increment download count: %v", err)
+				}
+			}()
 		}
 
 		// 3. Get cached path

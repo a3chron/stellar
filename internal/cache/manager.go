@@ -2,6 +2,7 @@ package cache
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,7 +116,9 @@ func CleanCache(excludeCurrent string) error {
 			continue
 		}
 
-		os.Remove(path)
+		if err := os.Remove(path); err != nil {
+			log.Printf("warning: failed to remove %s: %v", path, err)
+		}
 	}
 
 	return nil
