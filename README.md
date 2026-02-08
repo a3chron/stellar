@@ -1,7 +1,17 @@
 # stellar-cli
-CLI for stellar
+Easily get and switch between starship configs
 
 ![Starship theme switcher demo](assets/demo.gif)
+
+## Installation
+
+Just run the [install script](https://raw.githubusercontent.com/a3chron/stellar/main/install.sh) 
+which will download the binary and move it to `/usr/local/bin/`
+```bash
+curl -fsSL https://raw.githubusercontent.com/a3chron/stellar/main/install.sh | bash
+```
+
+## Why use & features
 
 Getting good starship configs so far was mostly random, in some potentially weird guys github dotfiles, searching for something entirely else...  
 With stellar, finding beautiful configs and getting them on your machine is as simple as \<insert something simple>.
@@ -12,14 +22,6 @@ No more manually copying starship configs to switch the theme everytime you chan
 
 You can also use stellar in scripts for bigger changes, for example switching you entire systems accent color, or light & dark mode, who knows.
 
-## Installation
-
-Just run the [install script](https://raw.githubusercontent.com/a3chron/stellar/main/install.sh) 
-which will download the binary and move it to `/usr/local/bin/`
-```bash
-curl -fsSL https://raw.githubusercontent.com/a3chron/stellar/main/install.sh | bash
-```
-
 ## Basic Usage
 
 ```bash
@@ -27,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/a3chron/stellar/main/install.sh | b
 stellar apply a3chron/ctp-blue
 stellar apply a3chron/ctp-blue@1.2
 
-# Preview before applying
+# Preview before applying (will open an extra window)
 stellar preview a3chron/ctp-red
 
 # List cached themes
@@ -45,7 +47,7 @@ stellar clean
 # Remove specific theme
 stellar remove a3chron/ctp-green
 
-# Rollback to previous
+# Rollback to previous theme
 stellar rollback
 
 # Update CLI
@@ -56,7 +58,15 @@ stellar update
 
 ### Switching between local configs
 
+You can just put your own configs under `~/.config/stellar/local/<your-theme>/latest.toml`, 
+and then switch to them using `stellar apply local/<your-theme>`.
+
 ### Customizing themes
+
+You can similarily copy one existing downloaded theme to the `stellar/local` folder, edit it, 
+and then switch to it using `stellar apply`.
+
+Because stellar is using a symlink to the currently selected config file, you get hot-reload as well.
 
 ## Contributing
 

@@ -63,13 +63,18 @@ release:
   draft: false
   prerelease: auto
   mode: replace
-  header: "## ✳ Stellar {{ .Tag }}"
+  header: |
+    # ✳ Stellar {{ .Tag }}
+    Install stellar by running:
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/a3chron/stellar/main/install.sh | bash
+    ```
   footer: |
     ---
     
     **Full Changelog**: https://github.com/a3chron/stellar/compare/{{ .PreviousTag }}...{{ .Tag }}
     
-    Released by [GoReleaser](https://github.com/goreleaser/goreleaser) ⚡
+    Released by [GoReleaser](https://github.com/goreleaser/goreleaser)
 
 # Changelog
 changelog:
