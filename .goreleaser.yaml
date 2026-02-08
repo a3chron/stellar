@@ -30,31 +30,15 @@ builds:
 # Archive configuration
 archives:
   - id: stellar
-    name_template: "stellar_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    format: tar.gz
+    name_template: "stellar-{{ .Os }}-{{ .Arch }}"
     files:
-      - README.md
-      - LICENSE
+      - stellar
+    format: binary
 
 # Checksums
 checksum:
   name_template: "checksums.txt"
   algorithm: sha256
-
-# Homebrew tap (optional - for macOS users)
-brews:
-  - name: stellar
-    repository:
-      owner: a3chron
-      name: homebrew-tap
-      token: "{{ .Env.GITHUB_TOKEN }}"
-    homepage: "https://github.com/a3chron/stellar"
-    description: "Starship theme manager - discover, preview, and apply themes"
-    license: MIT
-    install: |
-      bin.install "stellar"
-    test: |
-      system "#{bin}/stellar", "--version"
 
 # Linux packages
 nfpms:
