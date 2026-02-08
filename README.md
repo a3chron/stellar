@@ -63,7 +63,9 @@ stellar update
 All contributions are welcome :)  
 The easiest way to contribute to stellar is to [upload you own starship config](https://stellar-hub.vercel.app/upload) for other to use.
 
-Please use [conventional commits](https://www.conventionalcommits.org/) for PRs, and don't forget to run `pnpm format && pnpm lint` from time to time ^^
+Please use [conventional commits](https://www.conventionalcommits.org/) for PRs,
+and check for lint errors with `golangci-lint run` (included in the flake).
+
 
 ## TODOs
 
