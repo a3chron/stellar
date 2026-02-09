@@ -45,12 +45,10 @@ var applyCmd = &cobra.Command{
 				return err
 			}
 
-			// Increment download count (fire and forget)
-			go func() {
-				if err := client.IncrementDownloadCount(t.Author, t.Name); err != nil {
-					log.Printf("failed to increment download count: %v", err)
-				}
-			}()
+			// Increment download count
+			if err := client.IncrementDownloadCount(t.Author, t.Name); err != nil {
+				log.Printf("download count failed: %v", err)
+			}
 		}
 
 		// 3. Get cached path
