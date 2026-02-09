@@ -1,26 +1,23 @@
 # stellar-cli
 Easily get and switch between starship configs
 
-![Starship theme switcher demo](assets/demo.gif)
+![stellar cli demo](assets/demo.gif)
+![stellar hub](assets/web-hub.png)
 
 ## Installation
 
 Just run the [install script](https://raw.githubusercontent.com/a3chron/stellar/main/install.sh) 
-which will download the binary and move it to `/usr/local/bin/`
+which will download the binary and move it to `~/.local/bin`
 ```bash
 curl -fsSL https://raw.githubusercontent.com/a3chron/stellar/main/install.sh | bash
 ```
 
-## Why use & features
+## Why use
 
-Getting good starship configs so far was mostly random, in some potentially weird guys github dotfiles, searching for something entirely else...  
-With stellar, finding beautiful configs and getting them on your machine is as simple as \<insert something simple>.
+**Before:** Getting good starship configs so far was mostly random, from someones github dotfiles, searching for something entirely else...  
 
-You can also use themes from the community as boilerplates, customize them to be your own, and [switch between you own themes](#switching-between-local-configs) with stellar.
 
-No more manually copying starship configs to switch the theme everytime you change you background image (In case you did that... (I did))
-
-You can also use stellar in scripts for bigger changes, for example switching you entire systems accent color, or light & dark mode, who knows.
+**With stellar:** Find the right theme on the [stellar hub](https://stellar-hub.vercel.app) & `stellar apply <author>/<theme>`.
 
 ## Basic Usage
 
@@ -76,6 +73,17 @@ The easiest way to contribute to stellar is to [upload you own starship config](
 Please use [conventional commits](https://www.conventionalcommits.org/) for PRs,
 and check for lint errors with `golangci-lint run` (included in the flake).
 
+### vhs
+
+To record a vhs video just run:
+```bash
+vhs demo.tape
+```
+
+For nix users:
+```bash
+nix-shell -p vhs
+```
 
 ## TODOs
 
