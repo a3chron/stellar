@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -58,7 +57,7 @@ type VersionInfo struct {
 }
 
 func (c *Client) FetchThemeConfig(author, name, version string) (string, error) {
-	url := fmt.Sprintf("%s/api/theme/%s/%s/%s/download", c.baseURL, author, name, version)
+	url := fmt.Sprintf("%s/api/%s/%s/%s", c.baseURL, author, name, version)
 
 	resp, err := c.httpClient.Get(url)
 	if err != nil {
@@ -81,7 +80,7 @@ func (c *Client) FetchThemeConfig(author, name, version string) (string, error) 
 }
 
 func (c *Client) GetThemeInfo(author, name string) (*ThemeInfo, error) {
-	url := fmt.Sprintf("%s/api/theme/%s/%s", c.baseURL, author, name)
+	url := fmt.Sprintf("%s/api/%s/%s", c.baseURL, author, name)
 
 	resp, err := c.httpClient.Get(url)
 	if err != nil {
@@ -104,12 +103,10 @@ func (c *Client) GetThemeInfo(author, name string) (*ThemeInfo, error) {
 }
 
 func (c *Client) IncrementDownloadCount(author, name string) error {
-	url := fmt.Sprintf("%s/api/theme/download-count", c.baseURL)
+	url := fmt.Sprintf("%s/api/%s/%s", c.baseURL, author, name)
 
-	// Simple POST (rate-limited on server)
-	body := fmt.Sprintf(`{"author":"%s","slug":"%s"}`, author, name)
-	resp, err := c.httpClient.Post(url, "application/json",
-		strings.NewReader(body))
+	// Simple POST to increment download count
+	resp, err := c.httpClient.Post(url, "application/json", nil)
 	if err != nil {
 		return err
 	}
