@@ -14,13 +14,14 @@ type Theme struct {
 	Version string // Optional, defaults to "latest"
 }
 
-// ParseIdentifier parses "alice/rainbow@1.2" or "alice/rainbow"
+// ParseIdentifier parses "alice/rainbow@1.2", "alice/rainbow@latest", or "alice/rainbow"
 func ParseIdentifier(identifier string) (*Theme, error) {
 	// Normalize: remove leading/trailing whitespace
 	identifier = strings.TrimSpace(identifier)
 
 	// Match pattern: author/name[@version]
-	re := regexp.MustCompile(`^([a-zA-Z0-9_-]+)/([a-zA-Z0-9_-]+)(?:@v?([0-9]+\.[0-9]+))?$`)
+	// Version can be numeric (e.g., "1.2", "v1.2") or "latest"
+	re := regexp.MustCompile(`^([a-zA-Z0-9_-]+)/([a-zA-Z0-9_-]+)(?:@v?([0-9]+\.[0-9]+|latest))?$`)
 	matches := re.FindStringSubmatch(identifier)
 
 	if matches == nil {
@@ -34,7 +35,7 @@ func ParseIdentifier(identifier string) (*Theme, error) {
 	}
 
 	if matches[3] != "" {
-		theme.Version = matches[3] // Strip 'v' prefix if present
+		theme.Version = matches[3]
 	}
 
 	return theme, nil

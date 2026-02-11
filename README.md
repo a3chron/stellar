@@ -66,10 +66,18 @@ stellar update
 You can just put your own configs under `~/.config/stellar/local/<your-theme>/latest.toml`, 
 and then switch to them using `stellar apply local/<your-theme>`.
 
+> [!INFO]
+> The `/local` is not needed, you can actually use whatever you would like, i.e. `/<your-username>`,
+> including existing usernames, just create an extra folder for your theme
+
 ### Customizing themes
 
 You can similarily copy one existing downloaded theme to the `stellar/local` folder, edit it, 
 and then switch to it using `stellar apply`.
+
+> [!INFO]
+> @ here again, you don't need `/local`, so you can theoretically just copy for example
+> `a3chron/ctp-red/latest.toml` to `a3chron/my-own-theme/latest.toml`
 
 Because stellar is using a symlink to the currently selected config file, you get hot-reload as well.
 
@@ -95,15 +103,18 @@ nix-shell -p vhs
 
 ## TODOs
 
+- **`stellar publish` command**: Upload local themes directly to stellar-hub
+  - Challenge: Need to implement CLI authentication (OAuth flow with browser redirect or API keys)
+  - Would read from `~/.config/stellar/<author>/<theme>/latest.toml`
+  - Interactive prompts for metadata (name, description, screenshot, etc.)
+  - Skip complex fields initially (e.g., color scheme selection - add later)
+- **`stellar update <theme>` command**: Update an existing theme on stellar-hub with a new version
+  - Requires authentication (same challenge as publish)
+  - Upload new version of already published theme
+  - Interactive prompts for version notes, dependencies, etc.
 - Add progress bars for downloads
 - Improve error messages
 - Add tests
-- Set up GitHub Actions for releases
-- Create Homebrew formula (macOS)?
-- make sure this works for just local themes as well, i.e. a user can save his own themes in .config/stellar/username/my-config-01
-- add docs for editing themes, i.e. copy theme directory into own local user directory, switch to local version, edit it
-- add hot reload for developing themes / a reload comand (altough, should work with symlink? need to test)
-- Add alias command, to use for example 'stellar apply blue' instead of 'stellar apply a3chron/ctp-blue'
 
 <br />
 

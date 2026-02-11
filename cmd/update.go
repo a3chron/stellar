@@ -14,7 +14,6 @@ import (
 
 const (
 	LatestReleaseURL = "https://github.com/a3chron/stellar/releases/latest/download"
-	CurrentVersion   = "0.1.0" // TODO: have to update this manually, check with goreleaser etc.
 )
 
 var updateCmd = &cobra.Command{
@@ -23,10 +22,23 @@ var updateCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		color.Yellow("Checking for updates...")
 
+		// Check if update is available
+		updateAvailable, latestVersion, err := IsUpdateAvailable()
+		if err != nil {
+			return fmt.Errorf("failed to check for updates: %w", err)
+		}
+
+		if !updateAvailable {
+			color.Green("You're already on the latest version (%s)", latestVersion)
+			return nil
+		}
+
+		color.Yellow("Updating to version %s...", latestVersion)
+
 		// Construct download URL based on OS/arch
 		binary := fmt.Sprintf("stellar-%s-%s", runtime.GOOS, runtime.GOARCH)
 		if runtime.GOOS == "windows" {
-			return fmt.Errorf("why would you use windows? Anyways, stellar does not yet support windows, but support is planned. Check the repo for more info")
+			return fmt.Errorf("why would you use windows? Anyways, stellar does not yet support windows, but support is planned.")
 		}
 
 		downloadURL := fmt.Sprintf("%s/%s", LatestReleaseURL, binary)
@@ -77,7 +89,7 @@ var updateCmd = &cobra.Command{
 			return err
 		}
 
-		color.Green("Updated to latest version!")
+		color.Green("Successfully updated to version %s!", latestVersion)
 		return nil
 	},
 }

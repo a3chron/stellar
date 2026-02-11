@@ -13,6 +13,8 @@ var rootCmd = &cobra.Command{
 		// Initialize stellar directory structure before any command runs
 		return stellarinit.EnsureStellarDir()
 	},
+	// Custom version template (will be set by SetVersionInfo)
+	Version: "dev",
 }
 
 func Execute() error {
