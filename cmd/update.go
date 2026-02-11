@@ -38,7 +38,7 @@ var updateCmd = &cobra.Command{
 		// Construct download URL based on OS/arch
 		binary := fmt.Sprintf("stellar-%s-%s", runtime.GOOS, runtime.GOARCH)
 		if runtime.GOOS == "windows" {
-			return fmt.Errorf("why would you use windows? Anyways, stellar does not yet support windows, but support is planned.")
+			return fmt.Errorf("why would you use windows? Anyways, stellar does not yet support windows, but support is planned")
 		}
 
 		downloadURL := fmt.Sprintf("%s/%s", LatestReleaseURL, binary)
