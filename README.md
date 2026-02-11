@@ -96,3 +96,8 @@ nix-shell -p vhs
 - add docs for editing themes, i.e. copy theme directory into own local user directory, switch to local version, edit it
 - add hot reload for developing themes / a reload comand (altough, should work with symlink? need to test)
 - Add alias command, to use for example 'stellar apply blue' instead of 'stellar apply a3chron/ctp-blue'
+
+<br />
+
+<p align="center"><a href="https://github.com/a3chron/stellar/blob/main/LICENSE"><img alt="GitHub License" src="https://img.shields.io/github/license/a3chron/stellar?style=for-the-badge&labelColor=363a4f&color=b7bdf8">
+</a></p>
