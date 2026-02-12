@@ -75,7 +75,8 @@ var rollbackCmd = &cobra.Command{
 		}
 
 		// Update symlink
-		if err := symlink.CreateSymlink(cfg.CurrentPath); err != nil {
+		_, err = symlink.CreateSymlink(cfg.CurrentPath)
+		if err != nil {
 			return fmt.Errorf("failed to update symlink: %w", err)
 		}
 

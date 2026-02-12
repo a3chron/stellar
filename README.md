@@ -61,9 +61,24 @@ stellar update
 
 ## Local configs
 
+### Automatic backup of your original config
+
+When you first use `stellar apply`, if you have an existing `~/.config/starship.toml` that's not managed by stellar, it will be automatically backed up to `~/.config/stellar/<username>/backup/latest.toml` before creating the symlink.
+
+This ensures your carefully crafted config is never lost! You can apply it anytime with:
+```bash
+stellar apply <username>/backup
+```
+
+You can also rename the backup folder to give it a proper theme name:
+```bash
+mv ~/.config/stellar/<username>/backup ~/.config/stellar/<username>/my-custom-theme
+stellar apply <username>/my-custom-theme
+```
+
 ### Switching between local configs
 
-You can just put your own configs under `~/.config/stellar/local/<your-theme>/latest.toml`, 
+You can just put your own configs under `~/.config/stellar/local/<your-theme>/latest.toml`,
 and then switch to them using `stellar apply local/<your-theme>`.
 
 > [!INFO]
@@ -72,7 +87,7 @@ and then switch to them using `stellar apply local/<your-theme>`.
 
 ### Customizing themes
 
-You can similarily copy one existing downloaded theme to the `stellar/local` folder, edit it, 
+You can similarily copy one existing downloaded theme to the `stellar/local` folder, edit it,
 and then switch to it using `stellar apply`.
 
 > [!INFO]

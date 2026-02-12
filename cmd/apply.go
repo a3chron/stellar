@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"log"
+	"os/user"
 
 	"github.com/a3chron/stellar/internal/api"
 	"github.com/a3chron/stellar/internal/cache"
@@ -12,6 +13,14 @@ import (
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
+
+func getCurrentUsername() string {
+	currentUser, err := user.Current()
+	if err != nil {
+		return "local"
+	}
+	return currentUser.Username
+}
 
 var applyCmd = &cobra.Command{
 	Use:   "apply [author/theme[@version]]",
@@ -85,8 +94,16 @@ var applyCmd = &cobra.Command{
 		}
 
 		// 6. Create symlink
-		if err := symlink.CreateSymlink(themePath); err != nil {
+		backupPath, err := symlink.CreateSymlink(themePath)
+		if err != nil {
 			return err
+		}
+
+		// Notify user if their original config was backed up
+		if backupPath != "" {
+			color.Yellow("Your original starship.toml has been backed up to:")
+			color.Yellow("  %s", backupPath)
+			color.Cyan("\nYou can apply it later with: stellar apply %s/backup \n", getCurrentUsername())
 		}
 
 		color.Green("Applied %s", t)
