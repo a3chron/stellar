@@ -2,9 +2,13 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
+	"github.com/a3chron/stellar/internal/api"
+	"github.com/a3chron/stellar/internal/cache"
 	"github.com/a3chron/stellar/internal/config"
 	"github.com/a3chron/stellar/internal/symlink"
+	"github.com/a3chron/stellar/internal/theme"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
@@ -27,6 +31,33 @@ var rollbackCmd = &cobra.Command{
 
 		if cfg.PreviousPath == "" {
 			return fmt.Errorf("previous theme path not found in config")
+		}
+
+		// Check if previous theme file exists, re-download if missing
+		if _, err := os.Stat(cfg.PreviousPath); os.IsNotExist(err) {
+			color.Yellow("Previous theme not in cache, downloading...")
+
+			// Parse the theme identifier
+			t, err := theme.ParseIdentifier(cfg.PreviousTheme)
+			if err != nil {
+				return fmt.Errorf("failed to parse previous theme: %w", err)
+			}
+
+			// Download the theme
+			client := api.NewClient()
+			content, err := client.FetchThemeConfig(t.Author, t.Name, t.Version)
+			if err != nil {
+				return fmt.Errorf("failed to download previous theme: %w", err)
+			}
+
+			// Validate and save
+			if err := theme.ValidateConfigContent(content); err != nil {
+				return fmt.Errorf("invalid config: %w", err)
+			}
+
+			if err := cache.SaveTheme(t, content); err != nil {
+				return fmt.Errorf("failed to save theme: %w", err)
+			}
 		}
 
 		// Swap current and previous

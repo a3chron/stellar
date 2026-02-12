@@ -95,17 +95,16 @@ func ListCachedThemes() ([]string, error) {
 	return themes, nil
 }
 
-func CleanCache(excludeCurrent string) error {
+func CleanCache(excludeCurrentPath string) error {
 	themes, err := ListCachedThemes()
 	if err != nil {
 		return err
 	}
 
-	for _, themeID := range themes {
-		if themeID == excludeCurrent {
-			continue
-		}
+	// Track directories to potentially remove
+	dirsToCheck := make(map[string]bool)
 
+	for _, themeID := range themes {
 		t, err := theme.ParseIdentifier(themeID)
 		if err != nil {
 			continue
@@ -116,10 +115,46 @@ func CleanCache(excludeCurrent string) error {
 			continue
 		}
 
+		// Compare by actual file path
+		if excludeCurrentPath != "" && path == excludeCurrentPath {
+			continue
+		}
+
+		// Remove the theme file
 		if err := os.Remove(path); err != nil {
 			log.Printf("warning: failed to remove %s: %v", path, err)
+		}
+
+		// Track parent directories for cleanup
+		themeDir := filepath.Dir(path) // e.g., ~/.config/stellar/author/theme
+		dirsToCheck[themeDir] = true
+	}
+
+	// If removeDirectories, clean up empty theme and author directories
+	for themeDir := range dirsToCheck {
+		// Remove theme directory if empty
+		if isEmpty, _ := isDirEmpty(themeDir); isEmpty {
+			if err := os.Remove(themeDir); err != nil {
+				log.Printf("warning: failed to remove directory %s: %v", themeDir, err)
+			}
+
+			// Also try to remove author directory if empty
+			authorDir := filepath.Dir(themeDir)
+			if isEmpty, _ := isDirEmpty(authorDir); isEmpty {
+				if err := os.Remove(authorDir); err != nil {
+					log.Printf("warning: failed to remove directory %s: %v", authorDir, err)
+				}
+			}
 		}
 	}
 
 	return nil
+}
+
+func isDirEmpty(path string) (bool, error) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false, err
+	}
+	return len(entries) == 0, nil
 }

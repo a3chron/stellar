@@ -7,10 +7,11 @@ import (
 )
 
 type Config struct {
-	CurrentTheme  string `json:"current_theme"` // "alice/rainbow@1.2"
-	CurrentPath   string `json:"current_path"`  // Full path to .toml
-	PreviousTheme string `json:"previous_theme,omitempty"`
-	PreviousPath  string `json:"previous_path,omitempty"`
+	CurrentTheme     string   `json:"current_theme"`      // "alice/rainbow@1.2"
+	CurrentPath      string   `json:"current_path"`       // Full path to .toml
+	PreviousTheme    string   `json:"previous_theme,omitempty"`
+	PreviousPath     string   `json:"previous_path,omitempty"`
+	DownloadedThemes []string `json:"downloaded_themes,omitempty"` // ["alice/rainbow", "bob/sunset"]
 }
 
 func ConfigPath() (string, error) {
@@ -60,4 +61,21 @@ func (c *Config) Save() error {
 	}
 
 	return os.WriteFile(path, data, 0644)
+}
+
+// HasDownloaded checks if a theme (author/slug) was previously downloaded
+func (c *Config) HasDownloaded(themeID string) bool {
+	for _, t := range c.DownloadedThemes {
+		if t == themeID {
+			return true
+		}
+	}
+	return false
+}
+
+// MarkDownloaded adds a theme to the downloaded list if not already present
+func (c *Config) MarkDownloaded(themeID string) {
+	if !c.HasDownloaded(themeID) {
+		c.DownloadedThemes = append(c.DownloadedThemes, themeID)
+	}
 }

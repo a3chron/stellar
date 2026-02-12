@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"log"
 	"os"
+	"path/filepath"
 
 	"github.com/a3chron/stellar/internal/config"
 	"github.com/a3chron/stellar/internal/theme"
@@ -61,6 +63,22 @@ var removeCmd = &cobra.Command{
 			return fmt.Errorf("failed to remove theme: %w", err)
 		}
 
+		// Clean up empty directories (since we track downloads in config, no need to keep them)
+		themeDir := filepath.Dir(themePath) // e.g., ~/.config/stellar/author/theme
+		if isEmpty, _ := isDirEmpty(themeDir); isEmpty {
+			if err := os.Remove(themeDir); err != nil {
+				log.Printf("warning: failed to remove directory %s: %v", themeDir, err)
+			}
+
+			// Also try to remove author directory if empty
+			authorDir := filepath.Dir(themeDir)
+			if isEmpty, _ := isDirEmpty(authorDir); isEmpty {
+				if err := os.Remove(authorDir); err != nil {
+					log.Printf("warning: failed to remove directory %s: %v", authorDir, err)
+				}
+			}
+		}
+
 		color.Green("Removed: %s", themeID)
 
 		// If it was the current theme, update config
@@ -75,6 +93,14 @@ var removeCmd = &cobra.Command{
 
 		return nil
 	},
+}
+
+func isDirEmpty(path string) (bool, error) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false, err
+	}
+	return len(entries) == 0, nil
 }
 
 func init() {

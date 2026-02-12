@@ -26,7 +26,16 @@ var applyCmd = &cobra.Command{
 			return err
 		}
 
-		// 2. Check if cached, download if not
+		// 2. Load config early to check download history
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+
+		// Theme identifier without version for tracking (author/name)
+		themeID := fmt.Sprintf("%s/%s", t.Author, t.Name)
+
+		// 3. Check if cached, download if not
 		if !cache.ThemeExists(t) {
 			color.Yellow("Downloading %s...", t)
 
@@ -45,24 +54,27 @@ var applyCmd = &cobra.Command{
 				return err
 			}
 
-			// Increment download count
-			if err := client.IncrementDownloadCount(t.Author, t.Name); err != nil {
-				log.Printf("download count failed: %v", err)
+			// Only increment download count if:
+			// 1. Not running dev build
+			// 2. Theme hasn't been downloaded before
+			shouldCount := !IsDev() && !cfg.HasDownloaded(themeID)
+			if shouldCount {
+				if err := client.IncrementDownloadCount(t.Author, t.Name); err != nil {
+					log.Printf("download count failed: %v", err)
+				}
 			}
+
+			// Mark theme as downloaded
+			cfg.MarkDownloaded(themeID)
 		}
 
-		// 3. Get cached path
+		// 4. Get cached path
 		themePath, err := t.CachePath()
 		if err != nil {
 			return err
 		}
 
-		// 4. Update config (save previous for rollback)
-		cfg, err := config.Load()
-		if err != nil {
-			return err
-		}
-
+		// 5. Update config (save previous for rollback)
 		cfg.PreviousTheme = cfg.CurrentTheme
 		cfg.PreviousPath = cfg.CurrentPath
 		cfg.CurrentTheme = t.String()
@@ -72,7 +84,7 @@ var applyCmd = &cobra.Command{
 			return err
 		}
 
-		// 5. Create symlink
+		// 6. Create symlink
 		if err := symlink.CreateSymlink(themePath); err != nil {
 			return err
 		}

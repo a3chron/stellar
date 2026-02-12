@@ -40,6 +40,11 @@ func SetVersionInfo(version, commit, date string) {
 	rootCmd.SetVersionTemplate(getFullVersionOutput())
 }
 
+// IsDev returns true if running a development build
+func IsDev() bool {
+	return versionInfo.version == "dev"
+}
+
 type GitHubRelease struct {
 	TagName     string    `json:"tag_name"`
 	Name        string    `json:"name"`

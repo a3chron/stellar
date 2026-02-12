@@ -24,17 +24,17 @@ var cleanCmd = &cobra.Command{
 			cfg = &config.Config{}
 		}
 
-		excludeCurrent := ""
+		excludeCurrentPath := ""
 		if !cleanAll {
-			excludeCurrent = cfg.CurrentTheme
+			excludeCurrentPath = cfg.CurrentPath
 		}
 
 		// Count themes before cleaning
 		themesBefore, _ := cache.ListCachedThemes()
 		beforeCount := len(themesBefore)
 
-		// Clean cache
-		err = cache.CleanCache(excludeCurrent)
+		// Clean cache (always remove empty directories since we track downloads in config)
+		err = cache.CleanCache(excludeCurrentPath)
 		if err != nil {
 			return fmt.Errorf("failed to clean cache: %w", err)
 		}
