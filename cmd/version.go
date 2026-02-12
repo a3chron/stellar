@@ -144,6 +144,10 @@ func GetLatestRelease() (*GitHubRelease, error) {
 
 // IsUpdateAvailable checks if a newer version is available
 func IsUpdateAvailable() (bool, string, error) {
+	if IsDev() {
+		return false, "dev", nil
+	}
+
 	release, err := GetLatestRelease()
 	if err != nil {
 		return false, "", err

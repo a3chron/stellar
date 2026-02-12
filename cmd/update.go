@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"runtime"
@@ -61,34 +60,41 @@ var updateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		defer func() {
-			if err := os.Remove(tmpFile.Name()); err != nil {
-				log.Printf("failed to remove temp file: %v", err)
-			}
-		}()
+		tmpPath := tmpFile.Name()
+
+		// Cleanup helper - only call this in error paths before rename
+		cleanup := func() {
+			_ = os.Remove(tmpPath)
+		}
 
 		if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+			cleanup()
 			return err
 		}
 		if err := tmpFile.Close(); err != nil {
-			log.Printf("warning: failed to close temp file: %v", err)
+			cleanup()
+			return fmt.Errorf("failed to close temp file: %w", err)
 		}
 
 		// Get current executable path
 		execPath, err := os.Executable()
 		if err != nil {
+			cleanup()
 			return err
 		}
 
 		// Replace current binary
-		if err := os.Chmod(tmpFile.Name(), 0755); err != nil {
+		if err := os.Chmod(tmpPath, 0755); err != nil {
+			cleanup()
 			return err
 		}
 
-		if err := os.Rename(tmpFile.Name(), execPath); err != nil {
+		if err := os.Rename(tmpPath, execPath); err != nil {
+			cleanup()
 			return err
 		}
 
+		// No cleanup needed - temp file was successfully moved
 		color.Green("Successfully updated to version %s!", latestVersion)
 		return nil
 	},
