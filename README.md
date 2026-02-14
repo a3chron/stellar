@@ -11,6 +11,16 @@ which will download the binary and move it to `~/.local/bin`
 ```bash
 curl -fsSL https://raw.githubusercontent.com/a3chron/stellar/main/install.sh | bash
 ```
+<a >
+
+> [!WARNING]
+> stellar is not yet available for windows, because stellar uses symlinks, and windows is weird with symlinks.  
+> Windows users would need to either:
+> - Run it with admin privileges
+> - Enable Developer Mode in Windows 10+
+> - (Use WSL -> not really "Windows")
+> 
+> which is not optimal, and means we will have to do a special case for windows, which may take some time
 
 ## Why use
 

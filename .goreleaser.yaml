@@ -65,8 +65,10 @@ release:
   mode: replace
   header: |
     # ✳ Stellar {{ .Tag }}
-    Install stellar by running:
     ```bash
+    # Update stellar
+    stellar update
+    # Install stellar
     curl -fsSL https://raw.githubusercontent.com/a3chron/stellar/main/install.sh | bash
     ```
   footer: |

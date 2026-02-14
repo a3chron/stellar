@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Check for Windows
+if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
+  echo "Windows is not supported yet."
+  echo "For more information, see: https://github.com/a3chron/stellar#windows"
+  exit 1
+fi
+
 # Configurable install prefix
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN_DIR="$PREFIX/bin"
