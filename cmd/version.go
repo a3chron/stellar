@@ -95,6 +95,12 @@ func getVersionAsciiArt() string {
 		"                                ",
 	}
 
+	// Truncate commit hash to 8 characters for cleaner display
+	commit := versionInfo.commit
+	if len(commit) > 8 {
+		commit = commit[:8]
+	}
+
 	versionLines := []string{
 		"",
 		"",
@@ -102,7 +108,7 @@ func getVersionAsciiArt() string {
 		"  stellar",
 		"",
 		fmt.Sprintf("  version: %s", versionInfo.version),
-		fmt.Sprintf("  commit:  %s", versionInfo.commit),
+		fmt.Sprintf("  commit:  %s", commit),
 		fmt.Sprintf("  built:   %s", versionInfo.date),
 	}
 
