@@ -3,7 +3,6 @@ package symlink
 import (
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -89,6 +88,9 @@ func backupOriginalConfig(configPath string) (backupPath string, err error) {
 // CreateSymlink creates a symlink from ~/.config/starship.toml to the target file.
 // If an original (non-symlink) starship.toml exists, it's backed up first.
 // Returns the backup path if a backup was created (empty string if no backup was needed).
+//
+// Uses atomic symlink replacement (temp-then-rename) to prevent data loss:
+// If symlink creation fails, the original config remains intact.
 func CreateSymlink(target string) (backupPath string, err error) {
 	configPath, err := StarshipConfigPath()
 	if err != nil {
@@ -101,14 +103,25 @@ func CreateSymlink(target string) (backupPath string, err error) {
 		return "", fmt.Errorf("failed to backup original config: %w", err)
 	}
 
-	// Remove existing symlink/file
-	if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
-		log.Printf("warning: failed to remove %s: %v", configPath, err)
+	// Use atomic symlink replacement to avoid data loss window
+	// Strategy: Create temp symlink, then rename over target
+	configDir := filepath.Dir(configPath)
+	tempPath := filepath.Join(configDir, ".starship.toml.stellar-tmp")
+
+	// Remove any stale temp file from a previous failed attempt
+	_ = os.Remove(tempPath)
+
+	// Create new symlink at temp location
+	if err := os.Symlink(target, tempPath); err != nil {
+		return backupPath, fmt.Errorf("failed to create symlink: %w", err)
 	}
 
-	// Create new symlink
-	if err := os.Symlink(target, configPath); err != nil {
-		return backupPath, err
+	// Atomic rename over the target (atomic on POSIX systems)
+	// If this fails, the original file/symlink is still intact
+	if err := os.Rename(tempPath, configPath); err != nil {
+		// Clean up temp file on failure
+		_ = os.Remove(tempPath)
+		return backupPath, fmt.Errorf("failed to replace config: %w", err)
 	}
 
 	return backupPath, nil
