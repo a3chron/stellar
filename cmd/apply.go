@@ -1,9 +1,12 @@
 package cmd
 
 import (
+	"bufio"
 	"fmt"
 	"log"
+	"os"
 	"os/user"
+	"strings"
 
 	"github.com/a3chron/stellar/internal/api"
 	"github.com/a3chron/stellar/internal/cache"
@@ -14,12 +17,28 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var forceApply bool
+
 func getCurrentUsername() string {
 	currentUser, err := user.Current()
 	if err != nil {
 		return "local"
 	}
 	return currentUser.Username
+}
+
+// promptConfirmation asks for user confirmation, defaults to No
+func promptConfirmation(prompt string) bool {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Printf("%s [y/N]: ", prompt)
+
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		return false
+	}
+
+	response = strings.ToLower(strings.TrimSpace(response))
+	return response == "y" || response == "yes"
 }
 
 var applyCmd = &cobra.Command{
@@ -55,8 +74,28 @@ var applyCmd = &cobra.Command{
 			}
 
 			// Validate before saving
-			if err := theme.ValidateConfigContent(content); err != nil {
-				return fmt.Errorf("invalid config: %w", err)
+			validationResult, err := theme.ValidateConfigContent(content)
+			if err != nil {
+				return fmt.Errorf("validation error: %w", err)
+			}
+			if !validationResult.Valid {
+				return fmt.Errorf("invalid config: %w", validationResult.Error)
+			}
+
+			// Check for custom commands and warn user
+			if validationResult.HasCustomCommands && !forceApply {
+				color.Red("\nSECURITY WARNING ")
+				color.Yellow("This theme contains [custom] commands that can execute arbitrary shell code.")
+				color.Yellow("Custom commands run on your system every time Starship renders your prompt.")
+				fmt.Println()
+				color.Cyan("Before proceeding, you should review the config at:")
+				fmt.Printf("  https://stellar-hub.vercel.app/%s/%s\n", t.Author, t.Name)
+				fmt.Println()
+
+				if !promptConfirmation("Do you trust this theme and want to apply it?") {
+					color.Yellow("Aborted. Theme was not applied.")
+					return nil
+				}
 			}
 
 			if err := cache.SaveTheme(t, content); err != nil {
@@ -83,20 +122,23 @@ var applyCmd = &cobra.Command{
 			return err
 		}
 
-		// 5. Update config (save previous for rollback)
+		// 5. Create symlink FIRST (before saving config)
+		// This ensures that if symlink fails, config remains unchanged
+		backupPath, err := symlink.CreateSymlink(themePath)
+		if err != nil {
+			return err
+		}
+
+		// 6. Update config only AFTER symlink succeeds
 		cfg.PreviousTheme = cfg.CurrentTheme
 		cfg.PreviousPath = cfg.CurrentPath
 		cfg.CurrentTheme = t.String()
 		cfg.CurrentPath = themePath
 
 		if err := cfg.Save(); err != nil {
-			return err
-		}
-
-		// 6. Create symlink
-		backupPath, err := symlink.CreateSymlink(themePath)
-		if err != nil {
-			return err
+			// Symlink succeeded but config save failed
+			// This is less severe - theme is applied, but rollback info may be lost
+			return fmt.Errorf("theme applied but failed to save config: %w", err)
 		}
 
 		// Notify user if their original config was backed up
@@ -109,4 +151,8 @@ var applyCmd = &cobra.Command{
 		color.Green("Applied %s", t)
 		return nil
 	},
+}
+
+func init() {
+	applyCmd.Flags().BoolVarP(&forceApply, "force", "f", false, "Skip custom command warning and apply without confirmation")
 }

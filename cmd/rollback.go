@@ -51,8 +51,12 @@ var rollbackCmd = &cobra.Command{
 			}
 
 			// Validate and save
-			if err := theme.ValidateConfigContent(content); err != nil {
-				return fmt.Errorf("invalid config: %w", err)
+			validationResult, err := theme.ValidateConfigContent(content)
+			if err != nil {
+				return fmt.Errorf("validation error: %w", err)
+			}
+			if !validationResult.Valid {
+				return fmt.Errorf("invalid config: %w", validationResult.Error)
 			}
 
 			if err := cache.SaveTheme(t, content); err != nil {
@@ -60,10 +64,18 @@ var rollbackCmd = &cobra.Command{
 			}
 		}
 
-		// Swap current and previous
+		// Capture values for swap
 		previousTheme := cfg.PreviousTheme
 		previousPath := cfg.PreviousPath
 
+		// Update symlink FIRST (before modifying config)
+		// This ensures that if symlink fails, config remains unchanged
+		_, err = symlink.CreateSymlink(previousPath)
+		if err != nil {
+			return fmt.Errorf("failed to update symlink: %w", err)
+		}
+
+		// Only swap config after symlink succeeds
 		cfg.PreviousTheme = cfg.CurrentTheme
 		cfg.PreviousPath = cfg.CurrentPath
 		cfg.CurrentTheme = previousTheme
@@ -71,13 +83,9 @@ var rollbackCmd = &cobra.Command{
 
 		// Save config
 		if err := cfg.Save(); err != nil {
-			return fmt.Errorf("failed to save config: %w", err)
-		}
-
-		// Update symlink
-		_, err = symlink.CreateSymlink(cfg.CurrentPath)
-		if err != nil {
-			return fmt.Errorf("failed to update symlink: %w", err)
+			// Symlink succeeded but config save failed
+			// This is less severe - rollback applied, but state tracking may be lost
+			return fmt.Errorf("rollback applied but failed to save config: %w", err)
 		}
 
 		color.Green("Rolled back to: %s", cfg.CurrentTheme)

@@ -34,8 +34,12 @@ var previewCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			if err := theme.ValidateConfigContent(content); err != nil {
+			validationResult, err := theme.ValidateConfigContent(content)
+			if err != nil {
 				return err
+			}
+			if !validationResult.Valid {
+				return validationResult.Error
 			}
 			if err := cache.SaveTheme(t, content); err != nil {
 				return err

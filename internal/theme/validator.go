@@ -7,35 +7,46 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// ValidateConfig checks if the TOML is valid and safe
-func ValidateConfig(path string) error {
+// ValidationResult contains the validation outcome
+type ValidationResult struct {
+	Valid             bool
+	HasCustomCommands bool
+	Error             error
+}
+
+// ValidateConfig checks if the TOML is valid and identifies security concerns
+func ValidateConfig(path string) (ValidationResult, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return ValidationResult{}, err
 	}
 
 	return ValidateConfigContent(string(data))
 }
 
-func ValidateConfigContent(content string) error {
+// ValidateConfigContent validates TOML content and returns validation result
+// Custom commands are detected but NOT blocked - caller decides how to handle
+func ValidateConfigContent(content string) (ValidationResult, error) {
+	result := ValidationResult{Valid: true}
+
 	// 1. Check TOML syntax
 	var config map[string]interface{}
 	if _, err := toml.Decode(content, &config); err != nil {
-		return fmt.Errorf("invalid TOML: %w", err)
+		return ValidationResult{Valid: false, Error: fmt.Errorf("invalid TOML: %w", err)}, nil
 	}
 
-	// 2. Check for custom commands (security risk) TODO: just display a warning in this case, ask to proced, default *No*
+	// 2. Check for custom commands (security warning, not blocking)
 	if custom, ok := config["custom"]; ok {
 		customMap, ok := custom.(map[string]interface{})
 		if ok && len(customMap) > 0 {
-			return fmt.Errorf("config contains [custom] commands which may execute arbitrary code")
+			result.HasCustomCommands = true
 		}
 	}
 
 	// 3. Size check (prevent abuse)
 	if len(content) > 100*1024 { // 100KB max
-		return fmt.Errorf("config too large (max 100KB)")
+		return ValidationResult{Valid: false, Error: fmt.Errorf("config too large (max 100KB)")}, nil
 	}
 
-	return nil
+	return result, nil
 }
