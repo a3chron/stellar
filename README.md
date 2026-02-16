@@ -9,7 +9,8 @@ Easily get and switch between starship configs
       <td><img src="assets/web-hub-theme.png" alt="web hub theme detail" /></td>
     </tr>
   </tbody>
-</table
+</table>
+
 
 ## Installation
 
