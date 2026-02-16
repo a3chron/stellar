@@ -6,6 +6,7 @@ Set Height 800
 Set Shell "bash"
 Set TypingSpeed 80ms
 Set Theme "Catppuccin Mocha"
+Set FontFamily "JetBrainsMono Nerd Font"
 
 Type "bash -i"
 Enter
@@ -31,6 +32,22 @@ Type "stellar list"
 Enter
 Sleep 3s
 
-Type "stellar remove a3chron/ctp-green"
+Type "stellar clean"
 Enter
 Sleep 2s
+
+Type "stellar list"
+Enter
+Sleep 2s
+
+Type "clear"
+Enter
+Sleep 1s
+
+Type "stellar apply presets/rose-pine"
+Enter
+Sleep 2s
+
+Type "stellar apply presets/catppuccin-powerline"
+Enter
+Sleep 5s

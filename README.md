@@ -174,21 +174,21 @@ This error means the theme doesn't exist anywhere:
 
 ## TODOs
 
-- Add light / dark theme distinction, add filter in hub
-- **`stellar publish` command**: Upload local themes directly to stellar-hub
+- [ ] Add light / dark theme distinction, add filter in hub
+ -[ ] Allow removing several themes at once: `stellar remove a3chron/ctp-green a3chron/ctp-red`
+- [ ] **`stellar publish` command**: Upload local themes directly to stellar-hub
   - Challenge: Need to implement CLI authentication (OAuth flow with browser redirect or API keys)
   - Would read from `~/.config/stellar/<author>/<theme>/<version>.toml`
   - Interactive prompts for metadata (name, description, screenshot, etc.)
   - Skip complex fields initially (e.g., color scheme selection - add later)
-- **`stellar update <theme>` command**: Update an existing theme on stellar-hub with a new version
+- [ ] **`stellar update <theme>` command**: Update an existing theme on stellar-hub with a new version
   - Requires authentication (same challenge as publish)
   - Upload new version of already published theme
   - Interactive prompts for version notes, dependencies, etc.
-- Add progress bars for downloads
-- Improve error messages
-- Add tests
-- Preview: fix bash formatting
-- Preview: maybe cache un /tmp, os not downloading two times, but also not saving previewed themes in stllar cache 
+- [ ] Add progress bars for downloads
+- [ ] Add tests
+- [ ] Preview: fix bash formatting
+- [ ] Preview: maybe cache un /tmp, os not downloading two times, but also not saving previewed themes in stllar cache 
 
 <br />
 
