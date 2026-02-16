@@ -27,9 +27,33 @@ var previewCmd = &cobra.Command{
 			return err
 		}
 
+		client := api.NewClient()
+
+		// Resolve version if not explicitly specified
+		if !t.VersionExplicit {
+			themeDir, _ := t.CacheDir()
+			localVer, localErr := theme.FindLatestLocalVersion(themeDir)
+			hasLocalCache := localErr == nil
+
+			// If we have a local cache, use it (preview doesn't need --update)
+			if hasLocalCache {
+				t.Version = localVer
+			} else {
+				// No local cache - check online for latest version
+				info, err := client.GetThemeInfo(t.Author, t.Name)
+				if err == nil && len(info.Versions) > 0 {
+					// Online theme found - use latest version from API
+					t.Version = info.Versions[0].Version
+				} else {
+					// No online and no local
+					return fmt.Errorf("theme not found: %s/%s (not available online and no local cache)", t.Author, t.Name)
+				}
+			}
+		}
+
 		if !cache.ThemeExists(t) {
+
 			color.Yellow("Downloading %s...", t)
-			client := api.NewClient()
 			content, err := client.FetchThemeConfig(t.Author, t.Name, t.Version)
 			if err != nil {
 				return err

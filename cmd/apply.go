@@ -18,6 +18,7 @@ import (
 )
 
 var forceApply bool
+var updateTheme bool
 
 func getCurrentUsername() string {
 	currentUser, err := user.Current()
@@ -63,11 +64,51 @@ var applyCmd = &cobra.Command{
 		// Theme identifier without version for tracking (author/name)
 		themeID := fmt.Sprintf("%s/%s", t.Author, t.Name)
 
-		// 3. Check if cached, download if not
+		client := api.NewClient()
+		isLocalOnly := false
+
+		// 3. Resolve version if not explicitly specified
+		if !t.VersionExplicit {
+			themeDir, _ := t.CacheDir()
+			localVer, localErr := theme.FindLatestLocalVersion(themeDir)
+			hasLocalCache := localErr == nil
+
+			// If we have a local cache and --update is not set, use local version
+			if hasLocalCache && !updateTheme {
+				t.Version = localVer
+			} else {
+				// Check online for latest version (first download or --update)
+				info, err := client.GetThemeInfo(t.Author, t.Name)
+				if err == nil && len(info.Versions) > 0 {
+					// Online theme found - use latest version from API
+					latestVersion := info.Versions[0].Version
+
+					// If updating and we have a newer version available
+					if hasLocalCache && updateTheme && latestVersion != localVer {
+						color.Yellow("Update available: %s -> %s", localVer, latestVersion)
+					}
+
+					t.Version = latestVersion
+				} else {
+					// Fallback to local cache
+					isLocalOnly = true
+					if !hasLocalCache {
+						return fmt.Errorf("theme not found: %s/%s (not available online and no local cache)", t.Author, t.Name)
+					}
+					t.Version = localVer
+					color.HiBlack("Theme not found online, using local cache")
+				}
+			}
+		}
+
+		// 5. Check if cached, download if not
 		if !cache.ThemeExists(t) {
+			if isLocalOnly {
+				return fmt.Errorf("theme not found in local cache: %s", t)
+			}
+
 			color.Yellow("Downloading %s...", t)
 
-			client := api.NewClient()
 			content, err := client.FetchThemeConfig(t.Author, t.Name, t.Version)
 			if err != nil {
 				return fmt.Errorf("failed to download: %w", err)
@@ -155,4 +196,5 @@ var applyCmd = &cobra.Command{
 
 func init() {
 	applyCmd.Flags().BoolVarP(&forceApply, "force", "f", false, "Skip custom command warning and apply without confirmation")
+	applyCmd.Flags().BoolVarP(&updateTheme, "update", "u", false, "Check for and download newer version if available")
 }

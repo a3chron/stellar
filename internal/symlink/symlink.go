@@ -25,7 +25,7 @@ func isSymlink(path string) bool {
 	return info.Mode()&os.ModeSymlink != 0
 }
 
-// backupOriginalConfig backs up the user's original starship.toml to ~/.config/stellar/<username>/backup/latest.toml
+// backupOriginalConfig backs up the user's original starship.toml to ~/.config/stellar/<username>/backup/1.0.toml
 // Returns the backup path if successful, empty string otherwise
 func backupOriginalConfig(configPath string) (backupPath string, err error) {
 	// Check if the file exists and is NOT a symlink
@@ -43,14 +43,14 @@ func backupOriginalConfig(configPath string) (backupPath string, err error) {
 		return "", fmt.Errorf("failed to get current user: %w", err)
 	}
 
-	// Construct backup path: ~/.config/stellar/<username>/backup/latest.toml
+	// Construct backup path: ~/.config/stellar/<username>/backup/1.0.toml
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
 
 	backupDir := filepath.Join(home, ".config", "stellar", currentUser.Username, "backup")
-	backupPath = filepath.Join(backupDir, "latest.toml")
+	backupPath = filepath.Join(backupDir, "1.0.toml")
 
 	// Create backup directory
 	if err := os.MkdirAll(backupDir, 0755); err != nil {

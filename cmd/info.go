@@ -60,7 +60,7 @@ var infoCmd = &cobra.Command{
 		if len(info.Versions) > 0 && len(info.Versions[0].Dependencies) > 0 {
 			color.Yellow("Dependencies:")
 			for _, dep := range info.Versions[0].Dependencies {
-				fmt.Printf("  • %s (%s)\n", dep["name"], dep["type"])
+				fmt.Printf("  • %s\n", dep)
 			}
 			fmt.Println()
 		}

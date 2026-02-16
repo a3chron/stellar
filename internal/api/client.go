@@ -49,11 +49,10 @@ type ThemeInfo struct {
 
 // Version info
 type VersionInfo struct {
-	Version           string                   `json:"version"`
-	VersionNotes      string                   `json:"versionNotes"`
-	Dependencies      []map[string]interface{} `json:"dependencies"`
-	InstallationNotes string                   `json:"installationNotes"`
-	CreatedAt         string                   `json:"createdAt"`
+	Version      string   `json:"version"`
+	VersionNotes string   `json:"versionNotes"`
+	Dependencies []string `json:"dependencies"`
+	CreatedAt    string   `json:"createdAt"`
 }
 
 func (c *Client) FetchThemeConfig(author, name, version string) (string, error) {
