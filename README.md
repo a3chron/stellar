@@ -2,7 +2,14 @@
 Easily get and switch between starship configs
 
 ![stellar cli demo](assets/demo.gif)
-![stellar hub](assets/web-hub.png)
+<table>
+  <tbody>
+    <tr>
+      <td><img src="assets/web-hub.png" alt="web hub preview" /></td>
+      <td><img src="assets/web-hub-theme.png" alt="web hub theme detail" /></td>
+    </tr>
+  </tbody>
+</table
 
 ## Installation
 
@@ -167,6 +174,7 @@ This error means the theme doesn't exist anywhere:
 
 ## TODOs
 
+- Add light / dark theme distinction, add filter in hub
 - **`stellar publish` command**: Upload local themes directly to stellar-hub
   - Challenge: Need to implement CLI authentication (OAuth flow with browser redirect or API keys)
   - Would read from `~/.config/stellar/<author>/<theme>/<version>.toml`
