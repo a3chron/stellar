@@ -19,7 +19,8 @@ Just run the [install script](https://raw.githubusercontent.com/a3chron/stellar/
 ```bash
 curl -fsSL https://raw.githubusercontent.com/a3chron/stellar/main/install.sh | bash
 ```
-<a >
+
+<span id="windows" />
 
 > [!WARNING]
 > stellar is not yet available for windows, because stellar uses symlinks, and windows is weird with symlinks.  
@@ -29,6 +30,8 @@ curl -fsSL https://raw.githubusercontent.com/a3chron/stellar/main/install.sh | b
 > - (Use WSL -> not really "Windows")
 > 
 > which is not optimal, and means we will have to do a special case for windows, which may take some time
+>
+> In the meantime, you can try out the [starship theme switcher](https://github.com/a3chron/starship-theme-switcher), the first version of stellar, with a lot of features missing, but should be able to run on anything at least.
 
 ## Why use
 
