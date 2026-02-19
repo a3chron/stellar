@@ -20,9 +20,16 @@ Just run the [install script](https://raw.githubusercontent.com/a3chron/stellar/
 curl -fsSL https://raw.githubusercontent.com/a3chron/stellar/main/install.sh | bash
 ```
 
+Check that stellar is installed with `stellar --version` or `stellar --help`, 
+and search for a theme you like on the [stellar hub](https://stellar-hub.vercel.app) to apply.
+
+For just switching between your own local configs, check out the [local configs](#local-configs) section.
+
+Some [basic usage](#basic-usage) covered here, for more info, run `stellar --help`
+
 <span id="windows" />
 
-> [!WARNING]
+> [!NOTE]
 > stellar is not yet available for windows, because stellar uses symlinks, and windows is weird with symlinks.  
 > Windows users would need to either:
 > - Run it with admin privileges
@@ -179,7 +186,7 @@ This error means the theme doesn't exist anywhere:
 ## TODOs
 
 - [ ] Add light / dark theme distinction, add filter in hub
- -[ ] Allow removing several themes at once: `stellar remove a3chron/ctp-green a3chron/ctp-red`
+- [ ] Allow removing several themes at once: `stellar remove a3chron/ctp-green a3chron/ctp-red`
 - [ ] **`stellar publish` command**: Upload local themes directly to stellar-hub
   - Challenge: Need to implement CLI authentication (OAuth flow with browser redirect or API keys)
   - Would read from `~/.config/stellar/<author>/<theme>/<version>.toml`
