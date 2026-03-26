@@ -141,12 +141,12 @@ and then switch to it using `stellar apply ...`.
 > @ here again, you don't need `/<your-username>`, so you can theoretically just copy for example
 > `a3chron/ctp-red/1.0.toml` to `a3chron/dev/1.0.toml` or any other folder name
 
-Because stellar is using a symlink to the currently selected config file, you get hot-reload as well for editing configs, just like with the usualy `starship.toml`.
+Because stellar is using a symlink to the currently selected config file, you get hot-reload as well for editing configs, just like with the usual `starship.toml`.
 
 ## Contributing
 
 All contributions are welcome :)  
-The easiest way to contribute is to [upload you own starship config](https://stellar-hub.vercel.app/upload) for other to use ;)
+The easiest way to contribute is to [upload your own starship config](https://stellar-hub.vercel.app/upload) for other to use ;)
 
 Please use [conventional commits](https://www.conventionalcommits.org/) for PRs,
 and check for lint errors with `golangci-lint run` (included in the flake).
@@ -185,7 +185,6 @@ This error means the theme doesn't exist anywhere:
 
 ## TODOs
 
-- [ ] Add light / dark theme distinction, add filter in hub
 - [ ] Allow removing several themes at once: `stellar remove a3chron/ctp-green a3chron/ctp-red`
 - [ ] **`stellar publish` command**: Upload local themes directly to stellar-hub
   - Challenge: Need to implement CLI authentication (OAuth flow with browser redirect or API keys)
@@ -199,7 +198,7 @@ This error means the theme doesn't exist anywhere:
 - [ ] Add progress bars for downloads
 - [ ] Add tests
 - [ ] Preview: fix bash formatting
-- [ ] Preview: maybe cache un /tmp, os not downloading two times, but also not saving previewed themes in stllar cache 
+- [ ] Preview: maybe cache in /tmp, os not downloading two times, but also not saving previewed themes in stellar cache 
 
 <br />
 
