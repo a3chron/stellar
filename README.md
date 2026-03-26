@@ -52,7 +52,7 @@ Some [basic usage](#basic-usage) covered here, for more info, run `stellar --hel
 There are a few usecases for stellar:
 - You want to switch your starship prompt / theme from time to time (without manually copying starship configs)
 - You want to try a few different community prompts
-- You are working on a theme, and need to switch around between you normal and development version often
+- You are working on a theme, and need to switch around between your normal and development version often
 - You have a script to change the theme of the whole system / terminal in some kind, including the starship prompt
 
 ## Basic Usage
