@@ -58,7 +58,7 @@ There are a few usecases for stellar:
 ## Basic Usage
 
 ```bash
-# Apply a theme / config (downloads latest version, e.g., 1.2.toml)
+# Apply a theme / config (uses latest local version or downloads latest version, e.g., 1.2.toml)
 stellar apply a3chron/ctp-blue
 
 # Apply a specific version
