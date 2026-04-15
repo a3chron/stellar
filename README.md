@@ -143,26 +143,6 @@ and then switch to it using `stellar apply ...`.
 
 Because stellar is using a symlink to the currently selected config file, you get hot-reload as well for editing configs, just like with the usual `starship.toml`.
 
-## Contributing
-
-All contributions are welcome :)  
-The easiest way to contribute is to [upload your own starship config](https://stellar-hub.vercel.app/upload) for other to use ;)
-
-Please use [conventional commits](https://www.conventionalcommits.org/) for PRs,
-and check for lint errors with `golangci-lint run` (included in the flake).
-
-### vhs
-
-To record a vhs video just run:
-```bash
-vhs demo.tape
-```
-
-For nix users:
-```bash
-nix-shell -p vhs
-```
-
 ## Troubleshooting
 
 ### "Theme not found online, using local cache"
@@ -183,9 +163,67 @@ This error means the theme doesn't exist anywhere:
 - The theme may have been removed from stellar-hub
 - For local themes, make sure you created the folder at `~/.config/stellar/<author>/<theme>/` with a `.toml` file
 
+## Contributing
+
+All contributions are welcome :)  
+The easiest way to contribute is to [upload your own starship config](https://stellar-hub.vercel.app/upload) for other to use ;)
+
+Please use [conventional commits](https://www.conventionalcommits.org/) for PRs,
+and check for lint errors with `golangci-lint run` (included in the flake).
+
+### vhs
+
+To record a vhs video just run:
+```bash
+vhs demo.tape
+```
+
+For nix users:
+```bash
+nix-shell -p vhs
+```
+
+### Testing
+
+#### Running Tests
+
+From the `stellar-cli` directory:
+
+```bash
+# Enter development environment (NixOS)
+nix develop
+
+# Run E2E tests (recommended - tests all CLI functionality)
+./run-tests.sh -e
+
+# Run E2E tests against production API
+./run-tests.sh -ep
+
+# Run unit tests (internal modules)
+./run-tests.sh -u
+
+# Run all tests
+./run-tests.sh -a
+
+# Interactive menu
+./run-tests.sh
+```
+
+#### Test Types
+
+- **E2E tests**: Test complete user workflows (apply, remove, list, etc.). These are the primary tests and cover all CLI functionality.
+- **Unit tests**: Test internal modules (API client, theme parser). Less important, mainly for edge cases.
+
+#### Contributing Tests
+
+When adding new CLI features, please add corresponding E2E tests in `cmd/e2e_test.go`. This ensures the feature works from a user's perspective. Unit tests are not needed unless the feature has complex internal logic.
+
 ## TODOs
 
-- [ ] Allow removing several themes at once: `stellar remove a3chron/ctp-green a3chron/ctp-red`
+- [x] Allow removing several themes at once: `stellar remove a3chron/ctp-green a3chron/ctp-red`
+- [x] Preview: maybe cache in /tmp, os not downloading two times, but also not saving previewed themes in stellar cache
+
+- [ ] **Preview: fix bash formatting**
 - [ ] **`stellar publish` command**: Upload local themes directly to stellar-hub
   - Challenge: Need to implement CLI authentication (OAuth flow with browser redirect or API keys)
   - Would read from `~/.config/stellar/<author>/<theme>/<version>.toml`
@@ -195,10 +233,9 @@ This error means the theme doesn't exist anywhere:
   - Requires authentication (same challenge as publish)
   - Upload new version of already published theme
   - Interactive prompts for version notes, dependencies, etc.
-- [ ] Add progress bars for downloads
-- [ ] Add tests
-- [ ] Preview: fix bash formatting
-- [ ] Preview: maybe cache in /tmp, os not downloading two times, but also not saving previewed themes in stellar cache 
+- [ ] Add progress bars for downloads?
+- [x] Add tests
+- [ ] Get into nix pckgs
 
 <br />
 

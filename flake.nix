@@ -21,6 +21,9 @@
             gotools
             go-tools
             golangci-lint
+
+            # For test runner JSON parsing
+            jq
           ];
 
           shellHook = ''
