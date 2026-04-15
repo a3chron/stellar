@@ -17,37 +17,46 @@ var (
 )
 
 var removeCmd = &cobra.Command{
-	Use:   "remove [author/theme[@version]]",
-	Short: "Remove a cached theme",
-	Long: `Delete a theme from local cache.
+	Use:   "remove [author/theme[@version]]...",
+	Short: "Remove one or more cached themes",
+	Long: `Delete themes from local cache.
 
 Without a version: removes all versions of the theme
 With a version: removes only that specific version
 
 Use --force to remove the currently active theme.`,
-	Args: cobra.ExactArgs(1),
+	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		identifier := args[0]
-
-		// Parse identifier
-		t, err := theme.ParseIdentifier(identifier)
-		if err != nil {
-			return err
-		}
-
-		// Load config to check if it's current
+		// Load config once for all removals
 		cfg, err := config.Load()
 		if err != nil {
 			cfg = &config.Config{}
 		}
 
-		// If no version specified, remove entire theme directory
-		if !t.VersionExplicit {
-			return removeAllVersions(t, cfg)
+		var errs []error
+		for _, identifier := range args {
+			t, err := theme.ParseIdentifier(identifier)
+			if err != nil {
+				color.Red("Error parsing %q: %v", identifier, err)
+				errs = append(errs, err)
+				continue
+			}
+
+			if !t.VersionExplicit {
+				err = removeAllVersions(t, cfg)
+			} else {
+				err = removeSpecificVersion(t, cfg)
+			}
+			if err != nil {
+				color.Red("Error removing %q: %v", identifier, err)
+				errs = append(errs, err)
+			}
 		}
 
-		// Otherwise, remove specific version
-		return removeSpecificVersion(t, cfg)
+		if len(errs) > 0 {
+			return fmt.Errorf("%d removal(s) failed", len(errs))
+		}
+		return nil
 	},
 }
 
