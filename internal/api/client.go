@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/a3chron/stellar/internal/paths"
 )
 
 const BaseURL = "https://stellar-hub.vercel.app"
@@ -17,7 +19,17 @@ type Client struct {
 
 func NewClient() *Client {
 	return &Client{
-		baseURL: BaseURL,
+		baseURL: paths.APIURL(BaseURL),
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}
+}
+
+// NewClientWithURL creates a client with a specific base URL (for testing)
+func NewClientWithURL(baseURL string) *Client {
+	return &Client{
+		baseURL: baseURL,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -66,6 +78,9 @@ func (c *Client) FetchThemeConfig(author, name, version string) (string, error) 
 		_ = resp.Body.Close()
 	}()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return "", fmt.Errorf("theme version not found")
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("server returned %d", resp.StatusCode)
 	}
@@ -90,7 +105,7 @@ func (c *Client) GetThemeInfo(author, name string) (*ThemeInfo, error) {
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("theme not found")
+		return nil, fmt.Errorf("theme not found (status: %d)", resp.StatusCode)
 	}
 
 	var info ThemeInfo
@@ -112,6 +127,12 @@ func (c *Client) IncrementDownloadCount(author, name string) error {
 	defer func() {
 		_ = resp.Body.Close()
 	}()
+
+	if resp.StatusCode != http.StatusOK &&
+		resp.StatusCode != http.StatusCreated &&
+		resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("failed to increment download count (status: %d)", resp.StatusCode)
+	}
 
 	return nil
 }

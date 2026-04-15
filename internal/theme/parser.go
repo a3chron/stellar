@@ -3,11 +3,12 @@ package theme
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/a3chron/stellar/internal/paths"
 )
 
 type Theme struct {
@@ -24,6 +25,8 @@ func ParseIdentifier(identifier string) (*Theme, error) {
 
 	// Match pattern: author/name[@version]
 	// Version can be numeric (e.g., "1.2", "v1.2") or "latest"
+	// Note: Only X.Y format is supported intentionally. Themes use minor/patch updates only;
+	// major breaking changes should be published as a new theme (e.g., "mytheme-v2").
 	re := regexp.MustCompile(`^([a-zA-Z0-9_-]+)/([a-zA-Z0-9_-]+)(?:@v?([0-9]+\.[0-9]+|latest))?$`)
 	matches := re.FindStringSubmatch(identifier)
 
@@ -53,35 +56,12 @@ func (t *Theme) String() string {
 }
 
 func (t *Theme) CachePath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-
-	return filepath.Join(
-		home,
-		".config",
-		"stellar",
-		t.Author,
-		t.Name,
-		t.Version+".toml",
-	), nil
+	return paths.ThemeCachePath(t.Author, t.Name, t.Version)
 }
 
 // CacheDir returns the directory path for this theme (without version file)
 func (t *Theme) CacheDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-
-	return filepath.Join(
-		home,
-		".config",
-		"stellar",
-		t.Author,
-		t.Name,
-	), nil
+	return paths.ThemeCacheDir(t.Author, t.Name)
 }
 
 // FindLatestLocalVersion scans a theme directory and returns the highest semver version found.

@@ -39,20 +39,32 @@ var previewCmd = &cobra.Command{
 			if hasLocalCache {
 				t.Version = localVer
 			} else {
-				// No local cache - check online for latest version
-				info, err := client.GetThemeInfo(t.Author, t.Name)
-				if err == nil && len(info.Versions) > 0 {
-					// Online theme found - use latest version from API
-					t.Version = info.Versions[0].Version
+				// Check /tmp cache before hitting the API
+				tmpVer, tmpErr := theme.FindLatestLocalVersion(cache.TmpCacheDir(t))
+				if tmpErr == nil {
+					t.Version = tmpVer
 				} else {
-					// No online and no local
-					return fmt.Errorf("theme not found: %s/%s (not available online and no local cache)", t.Author, t.Name)
+					// No local cache - check online for latest version
+					info, err := client.GetThemeInfo(t.Author, t.Name)
+					if err == nil && len(info.Versions) > 0 {
+						t.Version = info.Versions[0].Version
+					} else {
+						return fmt.Errorf("theme not found: %s/%s (not available online and no local cache)", t.Author, t.Name)
+					}
 				}
 			}
 		}
 
-		if !cache.ThemeExists(t) {
-
+		// Determine theme path: main cache → tmp cache → download to tmp
+		var themePath string
+		if cache.ThemeExists(t) {
+			themePath, err = t.CachePath()
+			if err != nil {
+				return err
+			}
+		} else if cache.TmpThemeExists(t) {
+			themePath = cache.TmpCachePath(t)
+		} else {
 			color.Yellow("Downloading %s...", t)
 			content, err := client.FetchThemeConfig(t.Author, t.Name, t.Version)
 			if err != nil {
@@ -65,14 +77,10 @@ var previewCmd = &cobra.Command{
 			if !validationResult.Valid {
 				return validationResult.Error
 			}
-			if err := cache.SaveTheme(t, content); err != nil {
+			if err := cache.SaveThemeToTmp(t, content); err != nil {
 				return err
 			}
-		}
-
-		themePath, err := t.CachePath()
-		if err != nil {
-			return err
+			themePath = cache.TmpCachePath(t)
 		}
 
 		// Spawn terminal

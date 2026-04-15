@@ -4,16 +4,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/a3chron/stellar/internal/paths"
 )
 
 // EnsureStellarDir creates the ~/.config/stellar directory structure if it doesn't exist
 func EnsureStellarDir() error {
-	home, err := os.UserHomeDir()
+	stellarDir, err := paths.StellarHome()
 	if err != nil {
-		return fmt.Errorf("failed to get home directory: %w", err)
+		return fmt.Errorf("failed to get stellar home directory: %w", err)
 	}
-
-	stellarDir := filepath.Join(home, ".config", "stellar")
 
 	// Create main stellar directory
 	if err := os.MkdirAll(stellarDir, 0755); err != nil {
@@ -40,9 +40,5 @@ func EnsureStellarDir() error {
 
 // StellarDir returns the path to ~/.config/stellar
 func StellarDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".config", "stellar"), nil
+	return paths.StellarHome()
 }

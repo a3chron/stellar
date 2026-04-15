@@ -107,11 +107,22 @@ var applyCmd = &cobra.Command{
 				return fmt.Errorf("theme not found in local cache: %s", t)
 			}
 
-			color.Yellow("Downloading %s...", t)
+			var content string
 
-			content, err := client.FetchThemeConfig(t.Author, t.Name, t.Version)
-			if err != nil {
-				return fmt.Errorf("failed to download: %w", err)
+			if cache.TmpThemeExists(t) {
+				// Reuse theme downloaded during a recent preview
+				color.Cyan("Using previewed theme from temporary cache...")
+				raw, err := os.ReadFile(cache.TmpCachePath(t))
+				if err != nil {
+					return fmt.Errorf("failed to read tmp cache: %w", err)
+				}
+				content = string(raw)
+			} else {
+				color.Yellow("Downloading %s...", t)
+				content, err = client.FetchThemeConfig(t.Author, t.Name, t.Version)
+				if err != nil {
+					return fmt.Errorf("failed to download: %w", err)
+				}
 			}
 
 			// Validate before saving

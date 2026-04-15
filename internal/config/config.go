@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"github.com/a3chron/stellar/internal/paths"
 )
 
 type Config struct {
@@ -15,11 +17,7 @@ type Config struct {
 }
 
 func ConfigPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".config", "stellar", "config.json"), nil
+	return paths.ConfigPath()
 }
 
 func Load() (*Config, error) {

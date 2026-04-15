@@ -7,16 +7,15 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/a3chron/stellar/internal/paths"
 	"github.com/a3chron/stellar/internal/theme"
 )
 
 func EnsureCacheDir() error {
-	home, err := os.UserHomeDir()
+	cacheDir, err := paths.StellarHome()
 	if err != nil {
 		return err
 	}
-
-	cacheDir := filepath.Join(home, ".config", "stellar")
 	return os.MkdirAll(cacheDir, 0755)
 }
 
@@ -45,12 +44,10 @@ func ThemeExists(t *theme.Theme) bool {
 }
 
 func ListCachedThemes() ([]string, error) {
-	home, err := os.UserHomeDir()
+	cacheDir, err := paths.StellarHome()
 	if err != nil {
 		return nil, err
 	}
-
-	cacheDir := filepath.Join(home, ".config", "stellar")
 
 	var themes []string
 
@@ -149,6 +146,27 @@ func CleanCache(excludeCurrentPath string) error {
 	}
 
 	return nil
+}
+
+func TmpCachePath(t *theme.Theme) string {
+	return paths.TmpThemePath(t.Author, t.Name, t.Version)
+}
+
+func TmpCacheDir(t *theme.Theme) string {
+	return paths.TmpThemeDir(t.Author, t.Name)
+}
+
+func TmpThemeExists(t *theme.Theme) bool {
+	_, err := os.Stat(TmpCachePath(t))
+	return err == nil
+}
+
+func SaveThemeToTmp(t *theme.Theme, content string) error {
+	path := TmpCachePath(t)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(content), 0644)
 }
 
 func isDirEmpty(path string) (bool, error) {

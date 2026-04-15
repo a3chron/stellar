@@ -6,14 +6,12 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+
+	"github.com/a3chron/stellar/internal/paths"
 )
 
 func StarshipConfigPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".config", "starship.toml"), nil
+	return paths.StarshipConfig()
 }
 
 // isSymlink checks if the given path is a symlink
@@ -44,12 +42,12 @@ func backupOriginalConfig(configPath string) (backupPath string, err error) {
 	}
 
 	// Construct backup path: ~/.config/stellar/<username>/backup/1.0.toml
-	home, err := os.UserHomeDir()
+	stellarHome, err := paths.StellarHome()
 	if err != nil {
-		return "", fmt.Errorf("failed to get home directory: %w", err)
+		return "", fmt.Errorf("failed to get stellar home directory: %w", err)
 	}
 
-	backupDir := filepath.Join(home, ".config", "stellar", currentUser.Username, "backup")
+	backupDir := filepath.Join(stellarHome, currentUser.Username, "backup")
 	backupPath = filepath.Join(backupDir, "1.0.toml")
 
 	// Create backup directory
