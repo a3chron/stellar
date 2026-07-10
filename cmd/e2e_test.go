@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/a3chron/stellar/internal/paths"
 	"github.com/a3chron/stellar/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,6 +54,26 @@ func TestE2E_Apply(t *testing.T) {
 
 		assert.True(t, env.IsSymlink(env.StarshipPath))
 		assert.Equal(t, themePath, env.ReadSymlink(env.StarshipPath))
+	})
+
+	t.Run("Apply in copy mode (Windows behavior)", func(t *testing.T) {
+		t.Setenv(paths.EnvApplyMode, "copy")
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		env.CreateThemeFile("local", "mytheme", "1.0", testutil.SampleTOML())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"apply", "local/mytheme@1.0"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.NoError(t, err)
+
+		// In copy mode starship.toml is a regular file with the theme's content
+		assert.True(t, env.FileExists(env.StarshipPath))
+		assert.False(t, env.IsSymlink(env.StarshipPath))
+		assert.Equal(t, testutil.SampleTOML(), env.ReadFile(env.StarshipPath))
 	})
 
 	t.Run("Apply previewed theme from tmp", func(t *testing.T) {
@@ -316,6 +337,47 @@ func TestE2E_Current(t *testing.T) {
 		require.NoError(t, err)
 	})
 
+	t.Run("Shows applied theme (copy mode)", func(t *testing.T) {
+		t.Setenv(paths.EnvApplyMode, "copy")
+		env := testutil.SetupTestEnv(t)
+
+		themePath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+		// Copy mode: starship.toml is a regular file, not a symlink
+		env.CreateStarshipConfig(testutil.SampleTOML())
+
+		config := `{
+  "current_theme": "alice/rainbow@1.0",
+  "current_path": "` + themePath + `"
+}`
+		env.CreateConfig(config)
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"current"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.NoError(t, err)
+	})
+
+	t.Run("Missing starship.toml in copy mode", func(t *testing.T) {
+		t.Setenv(paths.EnvApplyMode, "copy")
+		env := testutil.SetupTestEnv(t)
+
+		// No starship.toml on disk, but config claims a theme is applied
+		config := `{
+  "current_theme": "alice/rainbow@1.0",
+  "current_path": "` + env.StellarDir + `/alice/rainbow/1.0.toml"
+}`
+		env.CreateConfig(config)
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"current"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		assert.NoError(t, err)
+	})
+
 	t.Run("Broken symlink", func(t *testing.T) {
 		env := testutil.SetupTestEnv(t)
 
@@ -540,6 +602,35 @@ func TestE2E_Rollback(t *testing.T) {
 
 		assert.True(t, env.IsSymlink(env.StarshipPath))
 		assert.Equal(t, previousPath, env.ReadSymlink(env.StarshipPath))
+	})
+
+	t.Run("Swaps current and previous (copy mode)", func(t *testing.T) {
+		t.Setenv(paths.EnvApplyMode, "copy")
+		env := testutil.SetupTestEnv(t)
+
+		currentPath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+		previousPath := env.CreateThemeFile("bob", "sunset", "2.0", testutil.SampleTOMLWithCustom())
+		// Copy mode: starship.toml is a regular file with the current theme's content
+		env.CreateStarshipConfig(testutil.SampleTOML())
+
+		config := `{
+  "current_theme": "alice/rainbow@1.0",
+  "current_path": "` + currentPath + `",
+  "previous_theme": "bob/sunset@2.0",
+  "previous_path": "` + previousPath + `"
+}`
+		env.CreateConfig(config)
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"rollback"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.NoError(t, err)
+
+		// starship.toml now holds the previous theme's content, still a regular file
+		assert.False(t, env.IsSymlink(env.StarshipPath))
+		assert.Equal(t, testutil.SampleTOMLWithCustom(), env.ReadFile(env.StarshipPath))
 	})
 
 	t.Run("Double rollback returns to original", func(t *testing.T) {

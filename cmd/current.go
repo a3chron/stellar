@@ -27,22 +27,36 @@ var currentCmd = &cobra.Command{
 			return nil
 		}
 
-		// Verify symlink is still valid
-		target, err := symlink.GetCurrentTarget()
-		if err != nil {
-			color.Red("Symlink broken or missing")
+		starshipConfig, _ := symlink.StarshipConfigPath()
+
+		// Verify the applied starship config is still present. Use Lstat so a
+		// dangling symlink still counts as present and falls through to the
+		// symlink-specific diagnostics below rather than "config missing".
+		if _, err := os.Lstat(starshipConfig); os.IsNotExist(err) {
+			color.Red("Starship config missing")
 			fmt.Printf("Config says: %s\n", cfg.CurrentTheme)
 			fmt.Println("\nRe-apply with: stellar apply " + cfg.CurrentTheme)
 			return nil
 		}
 
-		// Check if target exists
-		if _, err := os.Stat(target); os.IsNotExist(err) {
-			color.Red("Theme file missing")
-			fmt.Printf("Theme: %s\n", cfg.CurrentTheme)
-			fmt.Printf("Expected at: %s\n", cfg.CurrentPath)
-			fmt.Println("\nRe-download with: stellar apply " + cfg.CurrentTheme)
-			return nil
+		// In symlink mode, also verify the link points at an existing theme file.
+		// In copy mode there is no link to read, so the check above is sufficient.
+		if !symlink.IsCopyMode() {
+			target, err := symlink.GetCurrentTarget()
+			if err != nil {
+				color.Red("Symlink broken or missing")
+				fmt.Printf("Config says: %s\n", cfg.CurrentTheme)
+				fmt.Println("\nRe-apply with: stellar apply " + cfg.CurrentTheme)
+				return nil
+			}
+
+			if _, err := os.Stat(target); os.IsNotExist(err) {
+				color.Red("Theme file missing")
+				fmt.Printf("Theme: %s\n", cfg.CurrentTheme)
+				fmt.Printf("Expected at: %s\n", cfg.CurrentPath)
+				fmt.Println("\nRe-download with: stellar apply " + cfg.CurrentTheme)
+				return nil
+			}
 		}
 
 		// All good - display current theme
@@ -52,8 +66,7 @@ var currentCmd = &cobra.Command{
 		fmt.Printf("  Path:   %s\n", cfg.CurrentPath)
 		fmt.Println()
 
-		// Show symlink info
-		starshipConfig, _ := symlink.StarshipConfigPath()
+		// Show starship config path
 		fmt.Printf("  Starship config: %s\n", starshipConfig)
 
 		return nil

@@ -68,14 +68,14 @@ var rollbackCmd = &cobra.Command{
 		previousTheme := cfg.PreviousTheme
 		previousPath := cfg.PreviousPath
 
-		// Update symlink FIRST (before modifying config)
-		// This ensures that if symlink fails, config remains unchanged
-		_, err = symlink.CreateSymlink(previousPath)
+		// Apply the previous theme FIRST (before modifying config)
+		// This ensures that if applying fails, config remains unchanged
+		_, err = symlink.ApplyTheme(previousPath)
 		if err != nil {
-			return fmt.Errorf("failed to update symlink: %w", err)
+			return fmt.Errorf("failed to apply previous theme: %w", err)
 		}
 
-		// Only swap config after symlink succeeds
+		// Only swap config after applying succeeds
 		cfg.PreviousTheme = cfg.CurrentTheme
 		cfg.PreviousPath = cfg.CurrentPath
 		cfg.CurrentTheme = previousTheme

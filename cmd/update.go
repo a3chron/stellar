@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -133,10 +134,10 @@ var updateCmd = &cobra.Command{
 
 		color.Yellow("Updating to version %s...", latestVersion)
 
-		// Construct binary name based on OS/arch
+		// Construct binary name based on OS/arch (matches goreleaser artifact names)
 		binary := fmt.Sprintf("stellar-%s-%s", runtime.GOOS, runtime.GOARCH)
 		if runtime.GOOS == "windows" {
-			return fmt.Errorf("why would you use windows? Anyways, stellar does not yet support windows, but support is planned")
+			binary += ".exe"
 		}
 
 		// Step 1: Fetch checksums.txt for verification
@@ -168,8 +169,16 @@ var updateCmd = &cobra.Command{
 			return fmt.Errorf("download failed (status: %d)", resp.StatusCode)
 		}
 
-		// Write to temporary file
-		tmpFile, err := os.CreateTemp("", "stellar-update-*")
+		// Resolve the running binary's path up front so the downloaded file can be
+		// written next to it. Keeping them on the same volume means the final
+		// rename works on all OSes (system temp may be on a different volume).
+		execPath, err := os.Executable()
+		if err != nil {
+			return err
+		}
+
+		// Write to a temporary file in the same directory as the current binary
+		tmpFile, err := os.CreateTemp(filepath.Dir(execPath), ".stellar-update-*")
 		if err != nil {
 			return err
 		}
@@ -181,6 +190,9 @@ var updateCmd = &cobra.Command{
 		}
 
 		if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+			// Close first so the temp file isn't left with an open handle
+			// (which would block removal on Windows).
+			_ = tmpFile.Close()
 			cleanup()
 			return err
 		}
@@ -205,18 +217,12 @@ var updateCmd = &cobra.Command{
 		color.Green("Checksum verified successfully")
 
 		// Step 6: Replace current binary (only after checksum verified)
-		execPath, err := os.Executable()
-		if err != nil {
-			cleanup()
-			return err
-		}
-
 		if err := os.Chmod(tmpPath, 0755); err != nil {
 			cleanup()
 			return err
 		}
 
-		if err := os.Rename(tmpPath, execPath); err != nil {
+		if err := replaceExecutable(tmpPath, execPath); err != nil {
 			cleanup()
 			return err
 		}
@@ -225,4 +231,46 @@ var updateCmd = &cobra.Command{
 		color.Green("Successfully updated to version %s!", latestVersion)
 		return nil
 	},
+}
+
+// cleanupOldExecutable removes the ".old" binary left behind by a previous
+// Windows self-update. On Windows the old binary can't be deleted while it's
+// still running, so replaceExecutable leaves it in place; it is cleaned up here
+// on the next stellar run (when a different binary is executing). No-op on other
+// platforms, and safe to call even when nothing is left over.
+func cleanupOldExecutable() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	execPath, err := os.Executable()
+	if err != nil {
+		return
+	}
+	_ = os.Remove(execPath + ".old")
+}
+
+// replaceExecutable swaps the running binary at execPath for the file at newPath.
+//
+// On Unix a plain rename over the target works. On Windows a running .exe cannot
+// be overwritten, but it can be renamed: move the current binary aside, put the
+// new one in its place, then best-effort remove the old one (it stays locked
+// until this process exits, so a failure there is fine — it's cleaned up on the
+// next run).
+func replaceExecutable(newPath, execPath string) error {
+	if runtime.GOOS != "windows" {
+		return os.Rename(newPath, execPath)
+	}
+
+	oldPath := execPath + ".old"
+	_ = os.Remove(oldPath) // clear any leftover from a previous update
+	if err := os.Rename(execPath, oldPath); err != nil {
+		return err
+	}
+	if err := os.Rename(newPath, execPath); err != nil {
+		// Restore the original binary so the user isn't left without one
+		_ = os.Rename(oldPath, execPath)
+		return err
+	}
+	_ = os.Remove(oldPath)
+	return nil
 }

@@ -17,6 +17,9 @@ const (
 	EnvTmpDir = "STELLAR_TMP_DIR"
 	// EnvAPIURL overrides the API base URL
 	EnvAPIURL = "STELLAR_API_URL"
+	// EnvApplyMode overrides how themes are applied ("symlink" or "copy").
+	// Defaults to symlink on Unix and copy on Windows.
+	EnvApplyMode = "STELLAR_APPLY_MODE"
 )
 
 // StellarHome returns the stellar configuration directory.

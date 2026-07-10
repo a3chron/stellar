@@ -174,14 +174,14 @@ var applyCmd = &cobra.Command{
 			return err
 		}
 
-		// 5. Create symlink FIRST (before saving config)
-		// This ensures that if symlink fails, config remains unchanged
-		backupPath, err := symlink.CreateSymlink(themePath)
+		// 5. Apply the theme FIRST (before saving config)
+		// This ensures that if applying fails, config remains unchanged
+		backupPath, err := symlink.ApplyTheme(themePath)
 		if err != nil {
 			return err
 		}
 
-		// 6. Update config only AFTER symlink succeeds
+		// 6. Update config only AFTER applying succeeds
 		cfg.PreviousTheme = cfg.CurrentTheme
 		cfg.PreviousPath = cfg.CurrentPath
 		cfg.CurrentTheme = t.String()

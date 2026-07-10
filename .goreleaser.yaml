@@ -15,7 +15,7 @@ builds:
     goos:
       - linux
       - darwin
-      # No windows - symlinks not supported well
+      - windows # Windows applies themes by copying instead of symlinking
     goarch:
       - amd64
       - arm64
@@ -33,7 +33,7 @@ archives:
     name_template: "stellar-{{ .Os }}-{{ .Arch }}"
     files:
       - stellar
-    format: binary
+    formats: [binary]
 
 # Checksums
 checksum:
@@ -69,8 +69,13 @@ release:
     ```bash
     # Update stellar
     stellar update
-    # Install stellar
+    # Install stellar (Linux / macOS)
     curl -fsSL https://raw.githubusercontent.com/a3chron/stellar/main/install.sh | bash
+    ```
+
+    ```powershell
+    # Install stellar (Windows)
+    irm https://raw.githubusercontent.com/a3chron/stellar/main/install.ps1 | iex
     ```
     
     **Full Changelog**: https://github.com/a3chron/stellar/compare/{{ .PreviousTag }}...{{ .Tag }}
