@@ -6,10 +6,13 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/a3chron/stellar/internal/paths"
+	"github.com/a3chron/stellar/internal/symlink"
 	"github.com/a3chron/stellar/internal/testutil"
+	"github.com/a3chron/stellar/internal/theme"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,6 +23,7 @@ import (
 
 func TestE2E_Apply(t *testing.T) {
 	t.Run("Download and apply remote theme", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
 		env := testutil.SetupTestEnv(t)
 		resetFlags()
 
@@ -40,6 +44,7 @@ func TestE2E_Apply(t *testing.T) {
 	})
 
 	t.Run("Apply cached theme", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
 		env := testutil.SetupTestEnv(t)
 		resetFlags()
 
@@ -57,8 +62,8 @@ func TestE2E_Apply(t *testing.T) {
 	})
 
 	t.Run("Apply in copy mode (Windows behavior)", func(t *testing.T) {
-		t.Setenv(paths.EnvApplyMode, "copy")
 		env := testutil.SetupTestEnv(t)
+		t.Setenv(paths.EnvApplyMode, "copy")
 		resetFlags()
 
 		env.CreateThemeFile("local", "mytheme", "1.0", testutil.SampleTOML())
@@ -74,6 +79,188 @@ func TestE2E_Apply(t *testing.T) {
 		assert.True(t, env.FileExists(env.StarshipPath))
 		assert.False(t, env.IsSymlink(env.StarshipPath))
 		assert.Equal(t, testutil.SampleTOML(), env.ReadFile(env.StarshipPath))
+	})
+
+	t.Run("Backup hint is a valid identifier (copy mode)", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		t.Setenv(paths.EnvApplyMode, "copy")
+		resetFlags()
+
+		// A pre-existing, unmanaged starship.toml that will be backed up.
+		env.CreateStarshipConfig("# my hand-written original config")
+		env.CreateThemeFile("local", "mytheme", "1.0", testutil.SampleTOML())
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"apply", "local/mytheme@1.0"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+
+		// Find the printed restore hint and pull the identifier out of it.
+		var hint string
+		for _, line := range strings.Split(output, "\n") {
+			if strings.Contains(line, "stellar apply ") {
+				hint = line
+				break
+			}
+		}
+		require.NotEmpty(t, hint, "expected a backup restore hint in output:\n%s", output)
+
+		idx := strings.Index(hint, "stellar apply ")
+		identifier := strings.TrimSpace(hint[idx+len("stellar apply "):])
+
+		// The regression: on Windows a raw "DOMAIN\user/backup" hint would not
+		// parse. The sanitized identifier must both parse and target the backup.
+		parsed, perr := theme.ParseIdentifier(identifier)
+		require.NoError(t, perr, "backup hint %q must be a valid identifier", identifier)
+		assert.True(t, strings.HasSuffix(parsed.String(), "/backup@1.0"),
+			"backup hint %q should target <author>/backup@1.0", identifier)
+	})
+
+	t.Run("Hand-edited config is backed up (copy mode)", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		t.Setenv(paths.EnvApplyMode, "copy")
+		resetFlags()
+
+		env.CreateThemeFile("local", "mytheme", "1.0", testutil.SampleTOML())
+		env.CreateThemeFile("local", "other", "1.0", testutil.SampleTOMLWithCustom())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"apply", "local/mytheme@1.0"})
+		cmd.SetOut(new(bytes.Buffer))
+		require.NoError(t, cmd.Execute())
+
+		// The user edits the applied copy directly, then applies another theme.
+		editedContent := "# MY HAND-EDITED CONFIG"
+		env.CreateStarshipConfig(editedContent)
+		resetFlags()
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"apply", "local/other@1.0"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+
+		// The edit was detected and preserved as a backup, and the user was told.
+		assert.Contains(t, output, "has been backed up")
+		backupPath := filepath.Join(env.StellarDir, symlink.BackupAuthor(), "backup", "1.0.toml")
+		assert.Equal(t, editedContent, env.ReadFile(backupPath))
+		assert.Equal(t, testutil.SampleTOMLWithCustom(), env.ReadFile(env.StarshipPath))
+	})
+
+	t.Run("Editing cached theme file then re-applying creates no backup (copy mode)", func(t *testing.T) {
+		// Regression for finding #1: the README-documented workflow of editing
+		// a cached theme file directly and re-applying it (for a copy-mode
+		// hot-reload equivalent) must not be mistaken for a hand-edited
+		// starship.toml.
+		env := testutil.SetupTestEnv(t)
+		t.Setenv(paths.EnvApplyMode, "copy")
+		resetFlags()
+
+		themePath := env.CreateThemeFile("local", "mytheme", "1.0", testutil.SampleTOML())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"apply", "local/mytheme@1.0"})
+		cmd.SetOut(new(bytes.Buffer))
+		require.NoError(t, cmd.Execute())
+
+		// The user edits the cached theme file itself, not starship.toml.
+		editedThemeContent := "# EDITED CACHED THEME\nformat = \"$all\"\n"
+		require.NoError(t, os.WriteFile(themePath, []byte(editedThemeContent), 0644))
+		resetFlags()
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"apply", "local/mytheme@1.0"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+
+		assert.NotContains(t, output, "backed up", "re-applying an edited cached theme must not trigger a backup")
+		assert.Equal(t, editedThemeContent, env.ReadFile(env.StarshipPath))
+	})
+
+	t.Run("Clean --all then applying another theme creates no backup (copy mode)", func(t *testing.T) {
+		// Regression for finding #1: "stellar clean --all" removes the cached
+		// theme file that stellar's copy came from, but the copy on disk (and
+		// its recorded applied_hash) don't change, so it must still be
+		// recognized as stellar's own file.
+		env := testutil.SetupTestEnv(t)
+		t.Setenv(paths.EnvApplyMode, "copy")
+		resetFlags()
+
+		env.CreateThemeFile("local", "mytheme", "1.0", testutil.SampleTOML())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"apply", "local/mytheme@1.0"})
+		cmd.SetOut(new(bytes.Buffer))
+		require.NoError(t, cmd.Execute())
+		resetFlags()
+
+		cleanRunner := NewRootCmd()
+		cleanRunner.SetArgs([]string{"clean", "--all"})
+		cleanRunner.SetOut(new(bytes.Buffer))
+		require.NoError(t, cleanRunner.Execute())
+		resetFlags()
+
+		// The next theme becomes available only after the clean (e.g. a fresh
+		// download); what matters for this regression is that stellar's own
+		// existing copy on disk is still recognized despite its cache source
+		// being gone.
+		env.CreateThemeFile("local", "other", "1.0", testutil.SampleTOMLWithCustom())
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"apply", "local/other@1.0"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+
+		assert.NotContains(t, output, "backed up", "clean --all followed by apply must not trigger a junk backup")
+		assert.Equal(t, testutil.SampleTOMLWithCustom(), env.ReadFile(env.StarshipPath))
+	})
+
+	t.Run("Switching apply mode copy to symlink creates no backup", func(t *testing.T) {
+		// Regression for finding #2: the managed-file check must not be
+		// mode-gated. Applying in copy mode, then applying again in symlink
+		// mode, must recognize the copy-mode file via applied_hash instead of
+		// backing it up as if it were a foreign original.
+		testutil.RequireSymlinks(t)
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		env.CreateThemeFile("local", "mytheme", "1.0", testutil.SampleTOML())
+		env.CreateThemeFile("local", "other", "1.0", testutil.SampleTOMLWithCustom())
+
+		t.Setenv(paths.EnvApplyMode, "copy")
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"apply", "local/mytheme@1.0"})
+		cmd.SetOut(new(bytes.Buffer))
+		require.NoError(t, cmd.Execute())
+		resetFlags()
+
+		t.Setenv(paths.EnvApplyMode, "symlink")
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"apply", "local/other@1.0"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+
+		assert.NotContains(t, output, "backed up", "mode switch must not trigger a junk backup")
+		assert.True(t, env.IsSymlink(env.StarshipPath))
 	})
 
 	t.Run("Apply previewed theme from tmp", func(t *testing.T) {
@@ -99,6 +286,7 @@ func TestE2E_Apply(t *testing.T) {
 	})
 
 	t.Run("Apply with update flag", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
 		env := testutil.SetupTestEnv(t)
 		resetFlags()
 
@@ -120,6 +308,7 @@ func TestE2E_Apply(t *testing.T) {
 	})
 
 	t.Run("Apply uses local cache without update", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
 		env := testutil.SetupTestEnv(t)
 		resetFlags()
 
@@ -141,6 +330,7 @@ func TestE2E_Apply(t *testing.T) {
 	})
 
 	t.Run("Apply specific version", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
 		env := testutil.SetupTestEnv(t)
 		resetFlags()
 
@@ -160,6 +350,7 @@ func TestE2E_Apply(t *testing.T) {
 	})
 
 	t.Run("Apply backs up original config", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
 		env := testutil.SetupTestEnv(t)
 		resetFlags()
 
@@ -191,6 +382,7 @@ func TestE2E_Apply(t *testing.T) {
 	})
 
 	t.Run("Apply updates config file", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
 		env := testutil.SetupTestEnv(t)
 		resetFlags()
 
@@ -206,6 +398,7 @@ func TestE2E_Apply(t *testing.T) {
 		configContent := env.ReadFile(filepath.Join(env.StellarDir, "config.json"))
 		assert.Contains(t, configContent, "local/mytheme@1.0")
 		assert.Contains(t, configContent, themePath)
+		assert.Contains(t, configContent, "applied_hash", "config should record the hash of the applied theme")
 	})
 
 	t.Run("Apply nonexistent theme errors", func(t *testing.T) {
@@ -318,6 +511,7 @@ func TestE2E_Current(t *testing.T) {
 	})
 
 	t.Run("Shows applied theme", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
 		env := testutil.SetupTestEnv(t)
 
 		themePath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
@@ -338,8 +532,8 @@ func TestE2E_Current(t *testing.T) {
 	})
 
 	t.Run("Shows applied theme (copy mode)", func(t *testing.T) {
-		t.Setenv(paths.EnvApplyMode, "copy")
 		env := testutil.SetupTestEnv(t)
+		t.Setenv(paths.EnvApplyMode, "copy")
 
 		themePath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
 		// Copy mode: starship.toml is a regular file, not a symlink
@@ -351,17 +545,20 @@ func TestE2E_Current(t *testing.T) {
 }`
 		env.CreateConfig(config)
 
-		cmd := NewRootCmd()
-		cmd.SetArgs([]string{"current"})
-		cmd.SetOut(new(bytes.Buffer))
-
-		err := cmd.Execute()
-		require.NoError(t, err)
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"current"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+		assert.Contains(t, output, "alice/rainbow@1.0")
 	})
 
 	t.Run("Missing starship.toml in copy mode", func(t *testing.T) {
-		t.Setenv(paths.EnvApplyMode, "copy")
 		env := testutil.SetupTestEnv(t)
+		t.Setenv(paths.EnvApplyMode, "copy")
 
 		// No starship.toml on disk, but config claims a theme is applied
 		config := `{
@@ -370,15 +567,78 @@ func TestE2E_Current(t *testing.T) {
 }`
 		env.CreateConfig(config)
 
-		cmd := NewRootCmd()
-		cmd.SetArgs([]string{"current"})
-		cmd.SetOut(new(bytes.Buffer))
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"current"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		assert.NoError(t, execErr)
+		assert.Contains(t, output, "Starship config missing")
+		assert.Contains(t, output, "stellar apply alice/rainbow@1.0")
+	})
 
-		err := cmd.Execute()
-		assert.NoError(t, err)
+	t.Run("Copy mode with cached theme file deleted reports missing", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		t.Setenv(paths.EnvApplyMode, "copy")
+
+		// starship.toml (the copy) is present and healthy, but the cached
+		// theme file it was copied from has since been removed (e.g. via
+		// "stellar clean --all"). current.go has no symlink to follow in
+		// copy mode, so cfg.CurrentPath is the only thing it can check.
+		env.CreateStarshipConfig(testutil.SampleTOML())
+		config := `{
+  "current_theme": "alice/rainbow@1.0",
+  "current_path": "` + env.StellarDir + `/alice/rainbow/1.0.toml"
+}`
+		env.CreateConfig(config)
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"current"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		assert.NoError(t, execErr)
+		assert.Contains(t, output, "Theme file missing")
+		assert.Contains(t, output, "Cached theme file missing", "wording should acknowledge the file is a standalone copy")
+		assert.Contains(t, output, "stellar apply alice/rainbow@1.0")
+	})
+
+	t.Run("Copy-applied config inspected with mode=symlink env still reports healthy", func(t *testing.T) {
+		// Regression for the mode-switch misclassification bug: current.go
+		// must branch on what's actually on disk (a regular file here), not
+		// on STELLAR_APPLY_MODE, which only describes how a *future* apply
+		// would behave.
+		env := testutil.SetupTestEnv(t)
+		t.Setenv(paths.EnvApplyMode, "symlink")
+
+		themePath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+		env.CreateStarshipConfig(testutil.SampleTOML())
+
+		config := `{
+  "current_theme": "alice/rainbow@1.0",
+  "current_path": "` + themePath + `"
+}`
+		env.CreateConfig(config)
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"current"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+		assert.Contains(t, output, "Current Theme")
+		assert.NotContains(t, output, "missing")
+		assert.NotContains(t, output, "broken")
 	})
 
 	t.Run("Broken symlink", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
 		env := testutil.SetupTestEnv(t)
 
 		require.NoError(t, os.Symlink("/nonexistent/path.toml", env.StarshipPath))
@@ -579,6 +839,7 @@ func TestE2E_Rollback(t *testing.T) {
 	})
 
 	t.Run("Swaps current and previous", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
 		env := testutil.SetupTestEnv(t)
 
 		currentPath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
@@ -605,8 +866,8 @@ func TestE2E_Rollback(t *testing.T) {
 	})
 
 	t.Run("Swaps current and previous (copy mode)", func(t *testing.T) {
-		t.Setenv(paths.EnvApplyMode, "copy")
 		env := testutil.SetupTestEnv(t)
+		t.Setenv(paths.EnvApplyMode, "copy")
 
 		currentPath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
 		previousPath := env.CreateThemeFile("bob", "sunset", "2.0", testutil.SampleTOMLWithCustom())
@@ -633,7 +894,44 @@ func TestE2E_Rollback(t *testing.T) {
 		assert.Equal(t, testutil.SampleTOMLWithCustom(), env.ReadFile(env.StarshipPath))
 	})
 
+	t.Run("Rollback backup notice (copy mode, hand-edited config)", func(t *testing.T) {
+		// Regression for the silent-rollback-backup bug: rollback must print
+		// the same backup notice apply does whenever backupPath != "".
+		env := testutil.SetupTestEnv(t)
+		t.Setenv(paths.EnvApplyMode, "copy")
+
+		currentPath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+		previousPath := env.CreateThemeFile("bob", "sunset", "2.0", testutil.SampleTOMLWithCustom())
+
+		// The user hand-edited the applied copy; config has no applied_hash
+		// (fabricated directly), so this can't be recognized as stellar's own.
+		editedContent := "# MY HAND-EDITED CONFIG BEFORE ROLLBACK"
+		env.CreateStarshipConfig(editedContent)
+
+		config := `{
+  "current_theme": "alice/rainbow@1.0",
+  "current_path": "` + currentPath + `",
+  "previous_theme": "bob/sunset@2.0",
+  "previous_path": "` + previousPath + `"
+}`
+		env.CreateConfig(config)
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"rollback"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+
+		assert.Contains(t, output, "has been backed up")
+		backupPath := filepath.Join(env.StellarDir, symlink.BackupAuthor(), "backup", "1.0.toml")
+		assert.Equal(t, editedContent, env.ReadFile(backupPath))
+	})
+
 	t.Run("Double rollback returns to original", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
 		env := testutil.SetupTestEnv(t)
 
 		currentPath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
@@ -660,6 +958,7 @@ func TestE2E_Rollback(t *testing.T) {
 	})
 
 	t.Run("Redownloads missing theme", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
 		env := testutil.SetupTestEnv(t)
 
 		mockAPI := testutil.CreateDefaultMockAPI()

@@ -70,7 +70,7 @@ var rollbackCmd = &cobra.Command{
 
 		// Apply the previous theme FIRST (before modifying config)
 		// This ensures that if applying fails, config remains unchanged
-		_, err = symlink.ApplyTheme(previousPath)
+		backupPath, err := symlink.ApplyTheme(previousPath, cfg)
 		if err != nil {
 			return fmt.Errorf("failed to apply previous theme: %w", err)
 		}
@@ -80,12 +80,20 @@ var rollbackCmd = &cobra.Command{
 		cfg.PreviousPath = cfg.CurrentPath
 		cfg.CurrentTheme = previousTheme
 		cfg.CurrentPath = previousPath
+		// Best-effort, same as apply: record what we just wrote so future runs
+		// recognize this file as stellar-managed.
+		cfg.AppliedHash, _ = symlink.HashFile(previousPath)
 
 		// Save config
 		if err := cfg.Save(); err != nil {
 			// Symlink succeeded but config save failed
 			// This is less severe - rollback applied, but state tracking may be lost
 			return fmt.Errorf("rollback applied but failed to save config: %w", err)
+		}
+
+		// Notify user if their original config was backed up (previously silent)
+		if backupPath != "" {
+			printBackupNotice(backupPath)
 		}
 
 		color.Green("Rolled back to: %s", cfg.CurrentTheme)

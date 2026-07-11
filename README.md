@@ -49,6 +49,12 @@ Some [basic usage](#basic-usage) covered here, for more info, run `stellar --hel
 > re-run `stellar apply <author>/<theme>` after editing.
 >
 > You can force copy mode anywhere (e.g. for testing) by setting `STELLAR_APPLY_MODE=copy`.
+>
+> **Release note:** the backup folder name is now the sanitized OS username (e.g. `john.doe` -> `john-doe`,
+> spaces and other characters `starship.toml`'s theme-identifier parser rejects are replaced with `-`), so a
+> raw Windows `DOMAIN\user`-style name always produces a valid, restorable `stellar apply <author>/backup`
+> hint. Backups created before this change under the old, unsanitized folder name are left in place at
+> their original path and are not migrated automatically.
 
 ## Why use
 
@@ -122,9 +128,20 @@ with beeing able to update either metadata like the theme name, description, pre
 
 When you first use `stellar apply`, if you have an existing `~/.config/starship.toml` that's not managed by stellar, it will be automatically backed up to `~/.config/stellar/<username>/backup/1.0.toml` before creating the symlink.
 
-This ensures your carefully crafted config is never lost :) You can apply it anytime with:
+Backups are versioned. If stellar later finds another unmanaged `starship.toml` (for example one you restored or hand-wrote), it backs that up too as `2.0.toml`, then `3.0.toml`, and so on, so an earlier backup is never overwritten.
+
+This also works in copy mode (the Windows default): if you edit the applied `starship.toml` directly, stellar notices the file no longer matches the theme it applied and backs up your edits before applying the next theme.
+
+Stellar recognizes its own applied file by a checksum recorded in `~/.config/stellar/config.json`, independent of apply mode (symlink or copy) or OS. This means editing a cached theme file directly and re-applying it, or running `stellar clean`/`stellar clean --all` and then applying another theme, never creates a spurious backup — only a config file you actually hand-edited yourself gets preserved.
+
+This ensures your carefully crafted config is never lost :) You can apply the newest backup anytime with:
 ```bash
 stellar apply <username>/backup
+```
+
+To restore a specific one — for instance your very first original config — pin the version:
+```bash
+stellar apply <username>/backup@1.0
 ```
 
 You can also rename the backup folder to give it a proper theme name:

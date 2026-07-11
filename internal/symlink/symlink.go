@@ -1,6 +1,9 @@
 package symlink
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -68,48 +71,148 @@ func copyFile(src, dst string) (err error) {
 	return nil
 }
 
-// backupOriginalConfig backs up the user's original starship.toml to ~/.config/stellar/<username>/backup/1.0.toml
-// Returns the backup path if successful, empty string otherwise
-func backupOriginalConfig(configPath string) (backupPath string, err error) {
+// filesEqual reports whether both files exist and have identical content.
+// Any read error counts as "not equal", which for backup decisions errs on
+// the side of preserving the file.
+func filesEqual(a, b string) bool {
+	contentA, err := os.ReadFile(a)
+	if err != nil {
+		return false
+	}
+	contentB, err := os.ReadFile(b)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(contentA, contentB)
+}
+
+// HashFile computes the SHA-256 hash of a file and returns it as a hex string.
+func HashFile(path string) (hash string, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to open file for hashing: %w", err)
+	}
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", fmt.Errorf("failed to hash file: %w", err)
+	}
+
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// hashOf returns the SHA-256 hex hash of path, or "" if it can't be read.
+// Used for "is this managed" comparisons, where an unreadable file should
+// simply fail to match rather than propagate an error.
+func hashOf(path string) string {
+	h, err := HashFile(path)
+	if err != nil {
+		return ""
+	}
+	return h
+}
+
+// sanitizeBackupAuthor turns a raw OS username into a valid theme-author
+// segment. Windows usernames from user.Current() look like "DOMAIN\user" and
+// may contain spaces or other characters the theme-identifier parser rejects
+// (it allows only [a-zA-Z0-9_-]). We drop any domain prefix and replace every
+// disallowed character with '-', falling back to "local" if nothing usable is
+// left, so the printed restore hint always parses.
+func sanitizeBackupAuthor(name string) string {
+	// Drop everything up to and including the last path separator so a
+	// "DOMAIN\user" (or "domain/user") input keeps only the "user" part.
+	if i := strings.LastIndexAny(name, `\/`); i >= 0 {
+		name = name[i+1:]
+	}
+
+	var b strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+
+	sanitized := b.String()
+	if sanitized == "" {
+		return "local"
+	}
+	return sanitized
+}
+
+// BackupAuthor returns the theme-author segment used for backups of the user's
+// original config: the sanitized current username, or "local" if it can't be
+// determined. Exported so callers can build a restore hint that matches where
+// the backup was actually written.
+func BackupAuthor() string {
+	u, err := user.Current()
+	if err != nil {
+		return "local"
+	}
+	return sanitizeBackupAuthor(u.Username)
+}
+
+// backupOriginalConfig backs up the user's original starship.toml under
+// ~/.config/stellar/<author>/backup/. Backups are versioned: the first one is
+// 1.0.toml (the user's genuine original), and every later unmanaged
+// starship.toml stellar finds gets the next major version (2.0.toml, 3.0.toml,
+// …) so no earlier backup is ever clobbered.
+// Returns the backup path if a backup was created, empty string otherwise.
+//
+// The "is this stellar's own file" check is mode-independent: it never asks
+// whether we're in symlink or copy mode, only what's actually on disk and
+// recorded in cfg. Each signal only ever *prevents* a backup; a false
+// negative just means an extra (harmless) backup, so this fails safe:
+//   - configPath is a symlink (symlink mode's own marker), or
+//   - cfg.AppliedHash is set and matches configPath's current content, or
+//   - cfg.CurrentTheme is set and configPath's content matches the cached
+//     theme file byte-for-byte (legacy fallback for configs saved before
+//     AppliedHash existed).
+//
+// cfg may be nil, treated the same as an empty config (i.e. no known state,
+// so nothing is recognized as managed and an unmanaged file always backs up).
+func backupOriginalConfig(configPath string, cfg *config.Config) (backupPath string, err error) {
 	// Check if the file exists
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		return "", nil // No file to back up
 	}
 
-	if IsCopyMode() {
-		// Copy mode leaves starship.toml as a regular file, so there's no
-		// symlink to distinguish a user's original config from one stellar
-		// copied in. Fall back to stellar's own state: if a theme is already
-		// applied, the current file is our copy and must not be backed up
-		// (doing so would clobber the real original backup).
-		if cfg, cerr := config.Load(); cerr == nil && cfg.CurrentTheme != "" {
-			return "", nil
-		}
-	} else if isSymlink(configPath) {
-		return "", nil // Already a symlink, no need to back up
+	if cfg == nil {
+		cfg = &config.Config{}
 	}
 
-	// Get the current user's username
-	currentUser, err := user.Current()
-	if err != nil {
-		return "", fmt.Errorf("failed to get current user: %w", err)
-	}
-
-	// Construct backup path: ~/.config/stellar/<username>/backup/1.0.toml
-	stellarHome, err := paths.StellarHome()
-	if err != nil {
-		return "", fmt.Errorf("failed to get stellar home directory: %w", err)
-	}
-
-	backupDir := filepath.Join(stellarHome, currentUser.Username, "backup")
-	backupPath = filepath.Join(backupDir, "1.0.toml")
-
-	// Never overwrite an existing backup: the first one holds the user's real
-	// original config. This is a safety net for copy mode, where a lost or reset
-	// config.json could otherwise make stellar mistake its own copy for the
-	// original and clobber the genuine backup.
-	if _, err := os.Stat(backupPath); err == nil {
+	managed := isSymlink(configPath) ||
+		(cfg.AppliedHash != "" && hashOf(configPath) == cfg.AppliedHash) ||
+		(cfg.CurrentTheme != "" && filesEqual(configPath, cfg.CurrentPath))
+	if managed {
 		return "", nil
+	}
+
+	// Construct backup directory: ~/.config/stellar/<author>/backup
+	backupDir, err := paths.ThemeCacheDir(BackupAuthor(), "backup")
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve backup directory: %w", err)
+	}
+
+	// Pick the first free version slot so an existing backup is never
+	// overwritten. The first backup (1.0.toml) holds the user's real original
+	// config; any later unmanaged starship.toml (e.g. a hand-written one) is
+	// preserved as the next version rather than clobbering the original.
+	for n := 1; ; n++ {
+		candidate, perr := paths.ThemeCachePath(BackupAuthor(), "backup", fmt.Sprintf("%d.0", n))
+		if perr != nil {
+			return "", fmt.Errorf("failed to resolve backup path: %w", perr)
+		}
+		if _, statErr := os.Stat(candidate); os.IsNotExist(statErr) {
+			backupPath = candidate
+			break
+		}
 	}
 
 	// Create backup directory
@@ -125,24 +228,39 @@ func backupOriginalConfig(configPath string) (backupPath string, err error) {
 	return backupPath, nil
 }
 
+// BackupIdentifier derives the theme identifier ("<author>/backup@<version>")
+// for a backup file from its path alone, so a printed restore hint always
+// matches where the backup was actually written, regardless of how BackupAuthor
+// resolves at call time.
+func BackupIdentifier(backupPath string) string {
+	version := strings.TrimSuffix(filepath.Base(backupPath), ".toml")
+	author := filepath.Base(filepath.Dir(filepath.Dir(backupPath)))
+	return fmt.Sprintf("%s/backup@%s", author, version)
+}
+
 // ApplyTheme points ~/.config/starship.toml at the target theme file.
 // On Unix a symlink is created; on Windows (or when STELLAR_APPLY_MODE=copy) the
 // theme file is copied over starship.toml instead, since Windows handles symlinks
 // poorly.
+//
+// cfg is the caller's loaded config, used only to recognize stellar's own
+// previously-applied file so it isn't mistaken for a user's original (see
+// backupOriginalConfig). It may be nil. This function does not read or write
+// cfg's persisted state itself; the caller is responsible for saving it.
 //
 // If an original (non-symlink) starship.toml exists, it's backed up first.
 // Returns the backup path if a backup was created (empty string if no backup was needed).
 //
 // Uses atomic replacement (temp-then-rename) to prevent data loss:
 // if applying fails, the original config remains intact.
-func ApplyTheme(target string) (backupPath string, err error) {
+func ApplyTheme(target string, cfg *config.Config) (backupPath string, err error) {
 	configPath, err := StarshipConfigPath()
 	if err != nil {
 		return "", err
 	}
 
-	// Back up original config if it exists and is not a symlink
-	backupPath, err = backupOriginalConfig(configPath)
+	// Back up original config if it exists and isn't recognized as stellar's own
+	backupPath, err = backupOriginalConfig(configPath, cfg)
 	if err != nil {
 		return "", fmt.Errorf("failed to backup original config: %w", err)
 	}

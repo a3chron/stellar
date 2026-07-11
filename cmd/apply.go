@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/user"
 	"strings"
 
 	"github.com/a3chron/stellar/internal/api"
@@ -20,14 +19,6 @@ import (
 var forceApply bool
 var updateTheme bool
 
-func getCurrentUsername() string {
-	currentUser, err := user.Current()
-	if err != nil {
-		return "local"
-	}
-	return currentUser.Username
-}
-
 // promptConfirmation asks for user confirmation, defaults to No
 func promptConfirmation(prompt string) bool {
 	reader := bufio.NewReader(os.Stdin)
@@ -40,6 +31,15 @@ func promptConfirmation(prompt string) bool {
 
 	response = strings.ToLower(strings.TrimSpace(response))
 	return response == "y" || response == "yes"
+}
+
+// printBackupNotice tells the user their original starship.toml was preserved
+// and how to restore it. Shared by apply and rollback so both surface the
+// same notice whenever backupOriginalConfig actually creates a backup.
+func printBackupNotice(backupPath string) {
+	color.Yellow("Your original starship.toml has been backed up to:")
+	color.Yellow("  %s", backupPath)
+	color.Cyan("\nYou can apply it later with: stellar apply %s \n", symlink.BackupIdentifier(backupPath))
 }
 
 var applyCmd = &cobra.Command{
@@ -176,7 +176,7 @@ var applyCmd = &cobra.Command{
 
 		// 5. Apply the theme FIRST (before saving config)
 		// This ensures that if applying fails, config remains unchanged
-		backupPath, err := symlink.ApplyTheme(themePath)
+		backupPath, err := symlink.ApplyTheme(themePath, cfg)
 		if err != nil {
 			return err
 		}
@@ -186,6 +186,12 @@ var applyCmd = &cobra.Command{
 		cfg.PreviousPath = cfg.CurrentPath
 		cfg.CurrentTheme = t.String()
 		cfg.CurrentPath = themePath
+		// Best-effort: record the hash of what was actually applied so future
+		// runs can recognize this exact file as stellar-managed regardless of
+		// apply mode. Empty on error (e.g. copy mode where a read races with
+		// something external); that just means a future run falls back to the
+		// legacy CurrentPath comparison instead of failing outright.
+		cfg.AppliedHash, _ = symlink.HashFile(themePath)
 
 		if err := cfg.Save(); err != nil {
 			// Symlink succeeded but config save failed
@@ -195,9 +201,7 @@ var applyCmd = &cobra.Command{
 
 		// Notify user if their original config was backed up
 		if backupPath != "" {
-			color.Yellow("Your original starship.toml has been backed up to:")
-			color.Yellow("  %s", backupPath)
-			color.Cyan("\nYou can apply it later with: stellar apply %s/backup \n", getCurrentUsername())
+			printBackupNotice(backupPath)
 		}
 
 		color.Green("Applied %s", t)
