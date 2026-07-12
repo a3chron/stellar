@@ -134,6 +134,8 @@ This also works in copy mode (the Windows default): if you edit the applied `sta
 
 Stellar recognizes its own applied file by a checksum recorded in `~/.config/stellar/config.json`, independent of apply mode (symlink or copy) or OS. This means editing a cached theme file directly and re-applying it, or running `stellar clean`/`stellar clean --all` and then applying another theme, never creates a spurious backup — only a config file you actually hand-edited yourself gets preserved.
 
+`stellar clean` (with or without `--all`) never deletes your backups either — they're preserved automatically and only removed if you explicitly run `stellar remove <username>/backup`.
+
 This ensures your carefully crafted config is never lost :) You can apply the newest backup anytime with:
 ```bash
 stellar apply <username>/backup
