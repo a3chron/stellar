@@ -15,9 +15,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const (
-	LatestReleaseURL = "https://github.com/a3chron/stellar/releases/latest/download"
-)
+// LatestReleaseURL is the base URL for downloading the latest release's
+// assets (checksums.txt and the per-platform binaries). It is a var rather
+// than a const so tests can point it at an httptest server; production
+// behavior is unchanged since the default is assigned here.
+var LatestReleaseURL = "https://github.com/a3chron/stellar/releases/latest/download"
 
 // fetchChecksums downloads checksums.txt from GitHub releases
 func fetchChecksums() (string, error) {
@@ -201,29 +203,29 @@ var updateCmd = &cobra.Command{
 			return err
 		}
 
+		// replaceExecutable owns the fate of tmpPath from here on: on success it
+		// has been renamed into place, and on failure it has either removed it
+		// (nothing of value lost) or deliberately preserved it for manual
+		// recovery (with instructions in the returned error). The caller must
+		// not call cleanup() itself, or it could delete the only verified copy
+		// of the new binary out from under a recovery path.
 		if err := replaceExecutable(tmpPath, execPath); err != nil {
-			cleanup()
 			return err
 		}
 
-		// No cleanup needed - temp file was successfully moved
 		color.Green("Successfully updated to version %s!", latestVersion)
 		return nil
 	},
 }
 
-// cleanupUpdateLeftovers is the PersistentPreRunE gate: it only does anything
-// on Windows, since that's the only platform replaceExecutable leaves a ".old"
-// binary behind on (a running .exe can't be deleted, only renamed out of the
-// way) and the only platform a ".stellar-update-*" temp file can survive a
-// crashed update (Unix error paths already remove their own temp file). Gating
-// here — rather than inside removeUpdateLeftovers — keeps the glob/remove logic
-// itself trivially testable on any OS.
+// cleanupUpdateLeftovers is the PersistentPreRunE gate: it best-effort removes
+// artifacts a previous "stellar update" run may have left behind — a ".old"
+// binary (Windows renames the running .exe aside rather than overwriting it,
+// since a running .exe can't be deleted) and any ".stellar-update-*" temp file
+// that survived an interrupted update (e.g. Ctrl-C or SIGKILL before the
+// update command's own cleanup ran). Temp files are created next to the
+// binary on every OS, so this cleanup runs on every OS, not just Windows.
 func cleanupUpdateLeftovers() {
-	if runtime.GOOS != "windows" {
-		return
-	}
-
 	execPath, err := os.Executable()
 	if err != nil {
 		return
@@ -237,44 +239,90 @@ func cleanupUpdateLeftovers() {
 // so a broad "*.old" glob is off-limits. Every removal is best-effort and safe
 // to call when nothing is left over.
 //
+// Directory entries are listed with os.ReadDir and matched with
+// strings.HasPrefix rather than filepath.Glob: Glob interprets "[", "]", "*"
+// etc. in the directory path itself as pattern metacharacters, so an install
+// dir containing one of those characters (e.g. "tools[1]") could silently
+// corrupt the pattern or return ErrBadPattern, both of which left leftovers
+// on disk forever.
+//
 // This runs from PersistentPreRunE, before the update command creates its own
 // temp file, so it never deletes an in-progress download of the current
 // process. A concurrent "stellar update" in another process could theoretically
-// have its temp file removed here; that race is accepted, and is Windows-only
-// per the gate in cleanupUpdateLeftovers.
+// have its temp file removed here; that race is accepted as unlikely.
 func removeUpdateLeftovers(execPath string) {
 	_ = os.Remove(execPath + ".old")
 
-	matches, err := filepath.Glob(filepath.Join(filepath.Dir(execPath), ".stellar-update-*"))
+	dir := filepath.Dir(execPath)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
-	for _, m := range matches {
-		_ = os.Remove(m)
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".stellar-update-") {
+			_ = os.Remove(filepath.Join(dir, entry.Name()))
+		}
 	}
 }
 
-// replaceExecutable swaps the running binary at execPath for the file at newPath.
+// replaceExecutable swaps the running binary at execPath for the checksum-
+// verified file at newPath. It owns newPath's fate entirely: on success
+// newPath has been renamed into place and no longer exists; on failure it has
+// either removed newPath (nothing of value was lost) or deliberately
+// preserved it with recovery instructions in the returned error. Callers must
+// not remove newPath themselves after calling this.
 //
-// On Unix a plain rename over the target works. On Windows a running .exe cannot
-// be overwritten, but it can be renamed: move the current binary aside, put the
-// new one in its place. The old binary stays locked until this process exits,
-// so it is deliberately left in place rather than removed here — cleanup
-// happens on the next stellar run via cleanupUpdateLeftovers.
+// On Unix a plain rename over the target works, and a failure means execPath
+// was never touched, so newPath is simply discarded.
+//
+// On Windows a running .exe cannot be overwritten, but it can be renamed:
+// move the current binary aside, then put the new one in its place. If
+// putting the new binary in place fails, we try to restore the original
+// binary automatically. If even that restore fails (execPath now missing
+// entirely), newPath is deliberately NOT removed — it is the only verified
+// copy of the new binary — and the error tells the user exactly what to
+// rename to recover.
 func replaceExecutable(newPath, execPath string) error {
 	if runtime.GOOS != "windows" {
-		return os.Rename(newPath, execPath)
+		if err := os.Rename(newPath, execPath); err != nil {
+			_ = os.Remove(newPath)
+			return err
+		}
+		return nil
 	}
 
 	oldPath := execPath + ".old"
 	_ = os.Remove(oldPath) // clear any leftover from a previous update
+
 	if err := os.Rename(execPath, oldPath); err != nil {
+		// execPath was never touched, so the verified download isn't needed.
+		_ = os.Remove(newPath)
 		return err
 	}
+
 	if err := os.Rename(newPath, execPath); err != nil {
-		// Restore the original binary so the user isn't left without one
-		_ = os.Rename(oldPath, execPath)
-		return err
+		if restoreErr := os.Rename(oldPath, execPath); restoreErr == nil {
+			// Original binary restored; the verified download isn't needed.
+			_ = os.Remove(newPath)
+			return err
+		}
+
+		// Double failure: execPath is now missing entirely. Preserve newPath
+		// (the verified new binary) and oldPath (the previous binary) and
+		// tell the user exactly how to recover instead of silently deleting
+		// the one file that's known-good.
+		return fmt.Errorf(
+			"failed to install update and could not restore the previous binary: %w\n\n"+
+				"Your files were not deleted, but manual recovery is needed:\n"+
+				"  - verified new binary: %s\n"+
+				"  - previous binary:     %s\n\n"+
+				"To finish the update yourself, run:\n"+
+				"  move %q %q",
+			err, newPath, oldPath, newPath, execPath,
+		)
 	}
+
+	// New binary is now in place; the old one stays locked until this process
+	// exits, so it is left for cleanupUpdateLeftovers on the next stellar run.
 	return nil
 }

@@ -44,11 +44,56 @@ func TestRemoveUpdateLeftovers_NothingToRemove(t *testing.T) {
 	})
 }
 
-// TestCleanupUpdateLeftovers_GateIsSafe verifies the PersistentPreRunE gate
-// itself never panics or errors when called directly (it early-returns on
-// non-Windows platforms, which covers CI).
-func TestCleanupUpdateLeftovers_GateIsSafe(t *testing.T) {
+// TestRemoveUpdateLeftovers_BracketDirName proves the fix for the
+// filepath.Glob metacharacter bug: Glob interprets "[", "]" etc. in the
+// directory path itself as pattern syntax, so an install dir like
+// "tools[1]" used to silently disable cleanup (either matching nothing, or
+// hitting ErrBadPattern, which was swallowed). os.ReadDir + strings.HasPrefix
+// has no such issue since the directory is opened directly rather than
+// pattern-matched.
+func TestRemoveUpdateLeftovers_BracketDirName(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "tools[1]")
+	require.NoError(t, os.Mkdir(dir, 0755))
+
+	execPath := filepath.Join(dir, "stellar.exe")
+	oldBinary := execPath + ".old"
+	tmpUpdate := filepath.Join(dir, ".stellar-update-xyz789")
+
+	require.NoError(t, os.WriteFile(oldBinary, []byte("old binary"), 0644))
+	require.NoError(t, os.WriteFile(tmpUpdate, []byte("partial download"), 0644))
+
+	removeUpdateLeftovers(execPath)
+
+	assert.NoFileExists(t, oldBinary, "leftover .old binary should be removed even when the dir name contains glob metacharacters")
+	assert.NoFileExists(t, tmpUpdate, "leftover update temp file should be removed even when the dir name contains glob metacharacters")
+}
+
+// TestCleanupUpdateLeftovers_RemovesRealArtifacts verifies the
+// PersistentPreRunE gate cleans up leftovers next to the actual running
+// binary (os.Executable() in a test resolves to the compiled test binary).
+// This now runs unconditionally on every OS: temp files are created next to
+// the binary regardless of platform, so an interrupted update (Ctrl-C,
+// SIGKILL) would litter the bin dir on Linux/macOS too if cleanup were still
+// gated to Windows only.
+func TestCleanupUpdateLeftovers_RemovesRealArtifacts(t *testing.T) {
+	execPath, err := os.Executable()
+	require.NoError(t, err)
+
+	oldBinary := execPath + ".old"
+	tmpUpdate := filepath.Join(filepath.Dir(execPath), ".stellar-update-test123")
+
+	require.NoError(t, os.WriteFile(oldBinary, []byte("old binary"), 0644))
+	require.NoError(t, os.WriteFile(tmpUpdate, []byte("partial download"), 0644))
+	t.Cleanup(func() {
+		_ = os.Remove(oldBinary)
+		_ = os.Remove(tmpUpdate)
+	})
+
 	require.NotPanics(t, func() {
 		cleanupUpdateLeftovers()
 	})
+
+	assert.NoFileExists(t, oldBinary, "leftover .old binary next to the real binary should be removed")
+	assert.NoFileExists(t, tmpUpdate, "leftover update temp file next to the real binary should be removed")
 }
