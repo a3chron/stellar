@@ -63,19 +63,62 @@ var currentCmd = &cobra.Command{
 				return nil
 			}
 
+		case statErr == nil && info.IsDir():
+			// Something (not stellar) replaced starship.toml with a
+			// directory. Neither symlink nor copy mode ever produces this,
+			// so there's nothing further to check.
+			color.Red("Starship config path is a directory, not a file")
+			fmt.Printf("Config says: %s\n", cfg.CurrentTheme)
+			fmt.Println("\nRe-apply with: stellar apply " + cfg.CurrentTheme)
+			return nil
+
 		case statErr == nil:
 			// Regular file (copy mode, or a symlink-mode config someone
-			// hand-edited into a plain file). There's no link to read, so the
-			// only diagnostic available is whether the cached theme file
-			// we'd re-download from is still around.
-			if cfg.CurrentPath != "" {
-				if _, err := os.Stat(cfg.CurrentPath); os.IsNotExist(err) {
-					color.Red("Theme file missing")
-					fmt.Printf("Theme: %s\n", cfg.CurrentTheme)
-					fmt.Printf("Cached theme file missing, expected at: %s\n", cfg.CurrentPath)
-					fmt.Println("\nRe-download with: stellar apply " + cfg.CurrentTheme)
-					return nil
+			// hand-edited into a plain file). There's no link to read, but
+			// unlike a plain existence check, AppliedHash (recorded by
+			// ApplyTheme/rollback whenever they write starship.toml) lets us
+			// verify the file's *content* still matches what was applied,
+			// not just that some file is present at cfg.CurrentPath.
+			if cfg.CurrentPath == "" {
+				color.Red("Current theme path is unknown")
+				fmt.Printf("Config says: %s\n", cfg.CurrentTheme)
+				fmt.Println("\nRe-apply with: stellar apply " + cfg.CurrentTheme)
+				return nil
+			}
+
+			if _, err := os.Stat(cfg.CurrentPath); os.IsNotExist(err) {
+				color.Red("Theme file missing")
+				fmt.Printf("Theme: %s\n", cfg.CurrentTheme)
+				fmt.Printf("Cached theme file missing, expected at: %s\n", cfg.CurrentPath)
+				fmt.Println("\nRe-download with: stellar apply " + cfg.CurrentTheme)
+				return nil
+			}
+
+			// Content check: does starship.toml still hold what was actually
+			// applied? Prefer AppliedHash, which is mode/OS independent and
+			// recorded at apply time; fall back to comparing directly
+			// against the cached theme file for legacy configs saved before
+			// AppliedHash existed. A hashing failure is treated as "can't
+			// tell" rather than "modified", so it fails open instead of
+			// reporting a false positive.
+			modified := false
+			if cfg.AppliedHash != "" {
+				if actualHash, herr := symlink.HashFile(starshipConfig); herr == nil {
+					modified = actualHash != cfg.AppliedHash
 				}
+			} else if currentHash, cerr := symlink.HashFile(starshipConfig); cerr == nil {
+				if cachedHash, cerr2 := symlink.HashFile(cfg.CurrentPath); cerr2 == nil {
+					modified = currentHash != cachedHash
+				}
+			}
+
+			if modified {
+				color.Red("Starship config was modified or replaced")
+				fmt.Printf("Theme: %s\n", cfg.CurrentTheme)
+				fmt.Println("starship.toml no longer matches the theme that was applied.")
+				fmt.Println("The next `stellar apply` will automatically back up your current starship.toml before applying.")
+				fmt.Println("\nRe-apply with: stellar apply " + cfg.CurrentTheme)
+				return nil
 			}
 
 		default:
