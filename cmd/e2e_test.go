@@ -11,7 +11,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -1428,11 +1427,7 @@ func TestE2E_Preview(t *testing.T) {
 // afterward so later test runs (and any cached test binary on disk) aren't
 // left corrupted.
 func TestE2E_Update(t *testing.T) {
-	// binaryName mirrors the construction in updateCmd (cmd/update.go).
-	binaryName := fmt.Sprintf("stellar-%s-%s", runtime.GOOS, runtime.GOARCH)
-	if runtime.GOOS == "windows" {
-		binaryName += ".exe"
-	}
+	binaryName := platformBinaryName()
 
 	// pinVersion sets versionInfo to a known non-dev version (IsDev() gates
 	// all update-checking on the version not being "dev") and restores the

@@ -10,6 +10,26 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// printReapplyHint prints the two-line diagnostic tail shown whenever
+// starship.toml is in a state that a re-apply would fix (missing, broken
+// symlink, replaced by a directory, unknown path): what config.json believes
+// is applied, and the exact command to re-apply it.
+func printReapplyHint(cfg *config.Config) {
+	fmt.Printf("Config says: %s\n", cfg.CurrentTheme)
+	fmt.Println("\nRe-apply with: stellar apply " + cfg.CurrentTheme)
+}
+
+// printThemeFileMissing prints the "Theme file missing" diagnostic. expectedLabel
+// is the only part that differs between call sites (the symlink branch points at
+// the link target, the regular-file branch at the cached theme file), so it's
+// passed in; everything else is identical.
+func printThemeFileMissing(cfg *config.Config, expectedLabel string) {
+	color.Red("Theme file missing")
+	fmt.Printf("Theme: %s\n", cfg.CurrentTheme)
+	fmt.Printf("%s: %s\n", expectedLabel, cfg.CurrentPath)
+	fmt.Println("\nRe-download with: stellar apply " + cfg.CurrentTheme)
+}
+
 var currentCmd = &cobra.Command{
 	Use:   "current",
 	Short: "Show the currently applied theme",
@@ -41,8 +61,7 @@ var currentCmd = &cobra.Command{
 		switch {
 		case os.IsNotExist(statErr):
 			color.Red("Starship config missing")
-			fmt.Printf("Config says: %s\n", cfg.CurrentTheme)
-			fmt.Println("\nRe-apply with: stellar apply " + cfg.CurrentTheme)
+			printReapplyHint(cfg)
 			return nil
 
 		case statErr == nil && info.Mode()&os.ModeSymlink != 0:
@@ -50,16 +69,12 @@ var currentCmd = &cobra.Command{
 			target, terr := symlink.GetCurrentTarget()
 			if terr != nil {
 				color.Red("Symlink broken or missing")
-				fmt.Printf("Config says: %s\n", cfg.CurrentTheme)
-				fmt.Println("\nRe-apply with: stellar apply " + cfg.CurrentTheme)
+				printReapplyHint(cfg)
 				return nil
 			}
 
 			if _, err := os.Stat(target); os.IsNotExist(err) {
-				color.Red("Theme file missing")
-				fmt.Printf("Theme: %s\n", cfg.CurrentTheme)
-				fmt.Printf("Expected at: %s\n", cfg.CurrentPath)
-				fmt.Println("\nRe-download with: stellar apply " + cfg.CurrentTheme)
+				printThemeFileMissing(cfg, "Expected at")
 				return nil
 			}
 
@@ -68,49 +83,30 @@ var currentCmd = &cobra.Command{
 			// directory. Neither symlink nor copy mode ever produces this,
 			// so there's nothing further to check.
 			color.Red("Starship config path is a directory, not a file")
-			fmt.Printf("Config says: %s\n", cfg.CurrentTheme)
-			fmt.Println("\nRe-apply with: stellar apply " + cfg.CurrentTheme)
+			printReapplyHint(cfg)
 			return nil
 
 		case statErr == nil:
 			// Regular file (copy mode, or a symlink-mode config someone
-			// hand-edited into a plain file). There's no link to read, but
-			// unlike a plain existence check, AppliedHash (recorded by
-			// ApplyTheme/rollback whenever they write starship.toml) lets us
-			// verify the file's *content* still matches what was applied,
-			// not just that some file is present at cfg.CurrentPath.
+			// hand-edited into a plain file). There's no link to read, so the
+			// managed-file check below (IsManaged) verifies the file's
+			// *content* still matches what was applied, not just that some file
+			// is present at cfg.CurrentPath.
 			if cfg.CurrentPath == "" {
 				color.Red("Current theme path is unknown")
-				fmt.Printf("Config says: %s\n", cfg.CurrentTheme)
-				fmt.Println("\nRe-apply with: stellar apply " + cfg.CurrentTheme)
+				printReapplyHint(cfg)
 				return nil
 			}
 
 			if _, err := os.Stat(cfg.CurrentPath); os.IsNotExist(err) {
-				color.Red("Theme file missing")
-				fmt.Printf("Theme: %s\n", cfg.CurrentTheme)
-				fmt.Printf("Cached theme file missing, expected at: %s\n", cfg.CurrentPath)
-				fmt.Println("\nRe-download with: stellar apply " + cfg.CurrentTheme)
+				printThemeFileMissing(cfg, "Cached theme file missing, expected at")
 				return nil
 			}
 
-			// Content check: does starship.toml still hold what was actually
-			// applied? Prefer AppliedHash, which is mode/OS independent and
-			// recorded at apply time; fall back to comparing directly
-			// against the cached theme file for legacy configs saved before
-			// AppliedHash existed. A hashing failure is treated as "can't
-			// tell" rather than "modified", so it fails open instead of
-			// reporting a false positive.
-			modified := false
-			if cfg.AppliedHash != "" {
-				if actualHash, herr := symlink.HashFile(starshipConfig); herr == nil {
-					modified = actualHash != cfg.AppliedHash
-				}
-			} else if currentHash, cerr := symlink.HashFile(starshipConfig); cerr == nil {
-				if cachedHash, cerr2 := symlink.HashFile(cfg.CurrentPath); cerr2 == nil {
-					modified = currentHash != cachedHash
-				}
-			}
+			// Report "modified" using the same predicate apply uses to decide
+			// whether it would back up this file, so `stellar current` never
+			// disagrees with what the next `stellar apply` actually does.
+			modified := !symlink.IsManaged(starshipConfig, cfg)
 
 			if modified {
 				color.Red("Starship config was modified or replaced")

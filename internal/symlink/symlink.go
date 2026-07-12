@@ -137,7 +137,7 @@ func sanitizeBackupAuthor(name string) string {
 
 	var b strings.Builder
 	for _, r := range name {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+		if theme.IsValidIdentifierRune(r) {
 			b.WriteRune(r)
 		} else {
 			b.WriteByte('-')
@@ -175,6 +175,31 @@ type BackupInfo struct {
 	Identifier string
 }
 
+// IsManaged reports whether the file at configPath is one stellar itself
+// applied, as opposed to a user's own original config that must be preserved.
+//
+// The check is mode-independent: it never asks whether we're in symlink or copy
+// mode, only what's actually on disk and recorded in cfg. Each signal only ever
+// *confirms* management, so a false negative just means an unmanaged file is
+// (harmlessly) backed up rather than data being lost — it fails safe toward
+// preserving the file:
+//   - configPath is a symlink (symlink mode's own marker), or
+//   - cfg.AppliedHash is set and matches configPath's current content, or
+//   - cfg.CurrentTheme is set and configPath's content matches the cached
+//     theme file byte-for-byte (legacy fallback for configs saved before
+//     AppliedHash existed).
+//
+// cfg may be nil, treated the same as an empty config (i.e. no known state, so
+// nothing is recognized as managed).
+func IsManaged(configPath string, cfg *config.Config) bool {
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
+	return isSymlink(configPath) ||
+		(cfg.AppliedHash != "" && hashOf(configPath) == cfg.AppliedHash) ||
+		(cfg.CurrentTheme != "" && filesEqual(configPath, cfg.CurrentPath))
+}
+
 // backupOriginalConfig backs up the user's original starship.toml under
 // ~/.config/stellar/<author>/backup/. Backups are versioned: the first one is
 // 1.0.toml (the user's genuine original), and every later unmanaged
@@ -182,39 +207,24 @@ type BackupInfo struct {
 // …) so no earlier backup is ever clobbered.
 // Returns a *BackupInfo if a backup was created, nil otherwise.
 //
-// The "is this stellar's own file" check is mode-independent: it never asks
-// whether we're in symlink or copy mode, only what's actually on disk and
-// recorded in cfg. Each signal only ever *prevents* a backup; a false
-// negative just means an extra (harmless) backup, so this fails safe:
-//   - configPath is a symlink (symlink mode's own marker), or
-//   - cfg.AppliedHash is set and matches configPath's current content, or
-//   - cfg.CurrentTheme is set and configPath's content matches the cached
-//     theme file byte-for-byte (legacy fallback for configs saved before
-//     AppliedHash existed).
+// Whether the current file is stellar's own (and so must not be backed up) is
+// decided by IsManaged; an unmanaged file always backs up.
 //
-// cfg may be nil, treated the same as an empty config (i.e. no known state,
-// so nothing is recognized as managed and an unmanaged file always backs up).
+// cfg may be nil, treated the same as an empty config.
 func backupOriginalConfig(configPath string, cfg *config.Config) (info *BackupInfo, err error) {
 	// Check if the file exists
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		return nil, nil // No file to back up
 	}
 
-	if cfg == nil {
-		cfg = &config.Config{}
-	}
-
-	managed := isSymlink(configPath) ||
-		(cfg.AppliedHash != "" && hashOf(configPath) == cfg.AppliedHash) ||
-		(cfg.CurrentTheme != "" && filesEqual(configPath, cfg.CurrentPath))
-	if managed {
+	if IsManaged(configPath, cfg) {
 		return nil, nil
 	}
 
 	author := BackupAuthor()
 
 	// Construct backup directory: ~/.config/stellar/<author>/backup
-	backupDir, err := paths.ThemeCacheDir(author, "backup")
+	backupDir, err := paths.ThemeCacheDir(author, theme.BackupThemeName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve backup directory: %w", err)
 	}
@@ -226,7 +236,7 @@ func backupOriginalConfig(configPath string, cfg *config.Config) (info *BackupIn
 	var backupPath, version string
 	for n := 1; ; n++ {
 		version = fmt.Sprintf("%d.0", n)
-		candidate, perr := paths.ThemeCachePath(author, "backup", version)
+		candidate, perr := paths.ThemeCachePath(author, theme.BackupThemeName, version)
 		if perr != nil {
 			return nil, fmt.Errorf("failed to resolve backup path: %w", perr)
 		}
@@ -249,7 +259,7 @@ func backupOriginalConfig(configPath string, cfg *config.Config) (info *BackupIn
 	// Build the identifier from the same author/version values used above,
 	// via the identifier format theme.Theme.String() already owns, instead of
 	// re-deriving it later by parsing backupPath.
-	identifier := (&theme.Theme{Author: author, Name: "backup", Version: version}).String()
+	identifier := (&theme.Theme{Author: author, Name: theme.BackupThemeName, Version: version}).String()
 
 	return &BackupInfo{Path: backupPath, Identifier: identifier}, nil
 }

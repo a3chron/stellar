@@ -18,6 +18,24 @@ type Theme struct {
 	VersionExplicit bool   // True if version was explicitly specified in the identifier
 }
 
+// BackupThemeName is the reserved theme name used for backups of the user's
+// original starship config (they live at <author>/backup). It is not a real
+// theme on the hub: internal/symlink writes backups under it, and
+// internal/cache skips it at clean time so a backup is never swept away.
+const BackupThemeName = "backup"
+
+// IsValidIdentifierRune reports whether r is allowed inside an author or name
+// segment of a theme identifier. It is the single definition of that character
+// class ([a-zA-Z0-9_-]); ParseIdentifier's regex below and any caller that
+// sanitizes input (e.g. internal/symlink.sanitizeBackupAuthor) must agree with
+// it, so the two can't silently drift.
+func IsValidIdentifierRune(r rune) bool {
+	return (r >= 'a' && r <= 'z') ||
+		(r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9') ||
+		r == '_' || r == '-'
+}
+
 // ParseIdentifier parses "alice/rainbow@1.2", "alice/rainbow@latest", or "alice/rainbow"
 func ParseIdentifier(identifier string) (*Theme, error) {
 	// Normalize: remove leading/trailing whitespace

@@ -288,6 +288,48 @@ func TestApplyTheme_VersionedBackup(t *testing.T) {
 	assert.Equal(t, firstOriginal, env.ReadFile(firstInfo.Path), "earlier backup must stay intact")
 }
 
+// TestIsManaged exercises the three signals that mark a starship.toml as
+// stellar's own, plus the nil-config and unmanaged fail-safe cases.
+func TestIsManaged(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+
+	themePath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+
+	t.Run("nil config is treated as empty and unmanaged", func(t *testing.T) {
+		env.CreateStarshipConfig(testutil.SampleTOML())
+		assert.False(t, IsManaged(env.StarshipPath, nil))
+	})
+
+	t.Run("symlink is managed", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
+		require.NoError(t, os.Remove(env.StarshipPath))
+		require.NoError(t, os.Symlink(themePath, env.StarshipPath))
+		assert.True(t, IsManaged(env.StarshipPath, &config.Config{}))
+	})
+
+	t.Run("matching applied hash is managed", func(t *testing.T) {
+		require.NoError(t, os.Remove(env.StarshipPath))
+		env.CreateStarshipConfig(testutil.SampleTOML())
+		hash, err := HashFile(env.StarshipPath)
+		require.NoError(t, err)
+		assert.True(t, IsManaged(env.StarshipPath, &config.Config{AppliedHash: hash}))
+	})
+
+	t.Run("legacy current-path content match is managed", func(t *testing.T) {
+		require.NoError(t, os.Remove(env.StarshipPath))
+		env.CreateStarshipConfig(testutil.SampleTOML())
+		cfg := &config.Config{CurrentTheme: "alice/rainbow@1.0", CurrentPath: themePath}
+		assert.True(t, IsManaged(env.StarshipPath, cfg))
+	})
+
+	t.Run("hand-edited content matching no signal is unmanaged", func(t *testing.T) {
+		require.NoError(t, os.Remove(env.StarshipPath))
+		env.CreateStarshipConfig("# hand-edited, matches nothing")
+		cfg := &config.Config{CurrentTheme: "alice/rainbow@1.0", CurrentPath: themePath, AppliedHash: "deadbeef"}
+		assert.False(t, IsManaged(env.StarshipPath, cfg))
+	})
+}
+
 func TestSanitizeBackupAuthor(t *testing.T) {
 	tests := []struct {
 		name  string

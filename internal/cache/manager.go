@@ -119,7 +119,7 @@ func CleanCache(excludeCurrentPath string) error {
 		// both `stellar clean` and `stellar clean --all`; they differ only
 		// in excludeCurrentPath). Backups are still removable explicitly via
 		// `stellar remove <author>/backup[@version]`.
-		if t.Name == "backup" {
+		if t.Name == theme.BackupThemeName {
 			continue
 		}
 

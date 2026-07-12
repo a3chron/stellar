@@ -96,6 +96,18 @@ func verifyChecksum(expected, actual, binaryName string) error {
 	return nil
 }
 
+// platformBinaryName returns the release asset name for the running platform,
+// matching the per-platform artifact names goreleaser produces
+// ("stellar-<os>-<arch>", with a ".exe" suffix on Windows). It is the single
+// definition of that name, shared by updateCmd and the update E2E test.
+func platformBinaryName() string {
+	name := fmt.Sprintf("stellar-%s-%s", runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	return name
+}
+
 var updateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "Update stellar CLI to the latest version",
@@ -115,11 +127,8 @@ var updateCmd = &cobra.Command{
 
 		color.Yellow("Updating to version %s...", latestVersion)
 
-		// Construct binary name based on OS/arch (matches goreleaser artifact names)
-		binary := fmt.Sprintf("stellar-%s-%s", runtime.GOOS, runtime.GOARCH)
-		if runtime.GOOS == "windows" {
-			binary += ".exe"
-		}
+		// Release asset name for this platform (matches goreleaser artifact names)
+		binary := platformBinaryName()
 
 		// Step 1: Fetch checksums.txt for verification
 		color.Yellow("Fetching checksums...")
