@@ -3,12 +3,15 @@
 package testutil
 
 import (
+	"bytes"
+	"io"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/a3chron/stellar/internal/paths"
+	"github.com/fatih/color"
 )
 
 // TestEnv holds the test environment configuration
@@ -56,11 +59,17 @@ func SetupTestEnv(t *testing.T) *TestEnv {
 	env.origEnv[paths.EnvStarshipPath] = os.Getenv(paths.EnvStarshipPath)
 	env.origEnv[paths.EnvTmpDir] = os.Getenv(paths.EnvTmpDir)
 	env.origEnv[paths.EnvAPIURL] = os.Getenv(paths.EnvAPIURL)
+	env.origEnv[paths.EnvApplyMode] = os.Getenv(paths.EnvApplyMode)
 
 	// Set test env variables
 	_ = os.Setenv(paths.EnvStellarHome, env.StellarDir)
 	_ = os.Setenv(paths.EnvStarshipPath, env.StarshipPath)
 	_ = os.Setenv(paths.EnvTmpDir, env.TmpDir)
+	// Pin apply mode to symlink so the suite is deterministic regardless of
+	// the OS running it (IsCopyMode defaults to copy on Windows). Tests that
+	// specifically want copy-mode behavior call t.Setenv(paths.EnvApplyMode,
+	// "copy") themselves *after* calling SetupTestEnv, so their override wins.
+	_ = os.Setenv(paths.EnvApplyMode, "symlink")
 
 	// Register cleanup
 	t.Cleanup(func() {
@@ -170,6 +179,78 @@ func (e *TestEnv) ReadSymlink(path string) string {
 		e.t.Fatalf("failed to read symlink %s: %v", path, err)
 	}
 	return target
+}
+
+// CaptureOutput runs fn with stdout redirected to a pipe and returns everything
+// written to it. It swaps both os.Stdout and color.Output: fatih/color captures
+// os.Stdout at package-init time, so reassigning os.Stdout alone would miss any
+// color.* output. Both are restored before returning. The pipe is drained in a
+// goroutine so large output can't deadlock on the pipe buffer.
+//
+// The restore is deferred and idempotent: if fn panics (e.g. a t.Fatal inside
+// it), os.Stdout/color.Output are still put back before the panic propagates,
+// instead of staying pointed at a pipe that no longer has a reader for every
+// later test in the process.
+func CaptureOutput(t *testing.T, fn func()) string {
+	t.Helper()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create pipe: %v", err)
+	}
+
+	origStdout := os.Stdout
+	origColorOutput := color.Output
+	os.Stdout = w
+	color.Output = w
+
+	done := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		done <- buf.String()
+	}()
+
+	restored := false
+	restore := func() {
+		if !restored {
+			restored = true
+			os.Stdout = origStdout
+			color.Output = origColorOutput
+			_ = w.Close()
+		}
+	}
+	defer restore()
+
+	fn()
+
+	// Restore first, then close the writer so the reader goroutine sees EOF.
+	restore()
+
+	out := <-done
+	if cerr := r.Close(); cerr != nil {
+		t.Fatalf("failed to close pipe reader: %v", cerr)
+	}
+	return out
+}
+
+// RequireSymlinks skips the test if the environment can't create symlinks
+// (e.g. Windows without Developer Mode or admin privileges). Call it at the
+// top of any test that exercises symlink-mode behavior directly.
+func RequireSymlinks(t *testing.T) {
+	t.Helper()
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	link := filepath.Join(dir, "link")
+
+	if err := os.WriteFile(target, []byte("probe"), 0644); err != nil {
+		t.Fatalf("failed to create symlink probe target: %v", err)
+	}
+
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks not supported in this environment: %v", err)
+	}
 }
 
 // SampleTOML returns a valid sample starship config

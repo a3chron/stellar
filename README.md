@@ -14,10 +14,20 @@ Easily get and switch between starship configs
 
 ## Installation
 
+### Linux / macOS
+
 Just run the [install script](https://raw.githubusercontent.com/a3chron/stellar/main/install.sh) 
 (which will download the binary and move it to `~/.local/bin`)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/a3chron/stellar/main/install.sh | bash
+```
+
+### Windows
+
+Run the [PowerShell install script](https://raw.githubusercontent.com/a3chron/stellar/main/install.ps1) 
+(which downloads the binary to `%LOCALAPPDATA%\stellar\bin` and adds it to your PATH)
+```powershell
+irm https://raw.githubusercontent.com/a3chron/stellar/main/install.ps1 | iex
 ```
 
 Check that stellar is installed with `stellar --version` or `stellar --help`, 
@@ -30,15 +40,21 @@ Some [basic usage](#basic-usage) covered here, for more info, run `stellar --hel
 <span id="windows" />
 
 > [!NOTE]
-> stellar is not yet available for windows, because stellar uses symlinks, and windows is weird with symlinks.  
-> Windows users would need to either:
-> - Run it with admin privileges
-> - Enable Developer Mode in Windows 10+
-> - (Use WSL -> not really "Windows")
-> 
-> which is not optimal, and means we will have to do a special case for windows, which may take some time
+> On Linux and macOS, stellar applies a theme by **symlinking** `~/.config/starship.toml` to the cached
+> config, which gives you hot-reload while editing local configs.
 >
-> In the meantime, you can try out the [starship theme switcher](https://github.com/a3chron/starship-theme-switcher), the first version of stellar, with a lot of features missing, but should be able to run on anything at least.
+> Windows handles symlinks poorly (they need Developer Mode or admin privileges), so on Windows stellar
+> **copies** the theme file over `starship.toml` instead. Everything works the same, with one caveat:
+> editing a local theme file does **not** live-update `starship.toml` (it's a copy, not a link) — just
+> re-run `stellar apply <author>/<theme>` after editing.
+>
+> You can force copy mode anywhere (e.g. for testing) by setting `STELLAR_APPLY_MODE=copy`.
+>
+> **Release note:** the backup folder name is now the sanitized OS username (e.g. `john.doe` -> `john-doe`,
+> spaces and other characters `starship.toml`'s theme-identifier parser rejects are replaced with `-`), so a
+> raw Windows `DOMAIN\user`-style name always produces a valid, restorable `stellar apply <author>/backup`
+> hint. Backups created before this change under the old, unsanitized folder name are left in place at
+> their original path and are not migrated automatically.
 
 ## Why use
 
@@ -112,9 +128,22 @@ with beeing able to update either metadata like the theme name, description, pre
 
 When you first use `stellar apply`, if you have an existing `~/.config/starship.toml` that's not managed by stellar, it will be automatically backed up to `~/.config/stellar/<username>/backup/1.0.toml` before creating the symlink.
 
-This ensures your carefully crafted config is never lost :) You can apply it anytime with:
+Backups are versioned. If stellar later finds another unmanaged `starship.toml` (for example one you restored or hand-wrote), it backs that up too as `2.0.toml`, then `3.0.toml`, and so on, so an earlier backup is never overwritten.
+
+This also works in copy mode (the Windows default): if you edit the applied `starship.toml` directly, stellar notices the file no longer matches the theme it applied and backs up your edits before applying the next theme.
+
+Stellar recognizes its own applied file by a checksum recorded in `~/.config/stellar/config.json`, independent of apply mode (symlink or copy) or OS. This means editing a cached theme file directly and re-applying it, or running `stellar clean`/`stellar clean --all` and then applying another theme, never creates a spurious backup — only a config file you actually hand-edited yourself gets preserved.
+
+`stellar clean` (with or without `--all`) never deletes your backups either — they're preserved automatically and only removed if you explicitly run `stellar remove <username>/backup`.
+
+This ensures your carefully crafted config is never lost :) You can apply the newest backup anytime with:
 ```bash
 stellar apply <username>/backup
+```
+
+To restore a specific one — for instance your very first original config — pin the version:
+```bash
+stellar apply <username>/backup@1.0
 ```
 
 You can also rename the backup folder to give it a proper theme name:
@@ -142,6 +171,10 @@ and then switch to it using `stellar apply ...`.
 > `a3chron/ctp-red/1.0.toml` to `a3chron/dev/1.0.toml` or any other folder name
 
 Because stellar is using a symlink to the currently selected config file, you get hot-reload as well for editing configs, just like with the usual `starship.toml`.
+
+> [!NOTE]
+> On Windows stellar copies the config instead of symlinking it (see the [Windows note](#windows)),
+> so editing a local theme file does **not** hot-reload — re-run `stellar apply <author>/<theme>` after editing.
 
 ## Troubleshooting
 
@@ -222,8 +255,13 @@ When adding new CLI features, please add corresponding E2E tests in `cmd/e2e_tes
 
 - [x] Allow removing several themes at once: `stellar remove a3chron/ctp-green a3chron/ctp-red`
 - [x] Preview: maybe cache in /tmp, os not downloading two times, but also not saving previewed themes in stellar cache
+- [x] Add tests
+- [x] **Windows support**: apply themes by copying instead of symlinking (`STELLAR_APPLY_MODE`), Windows release binary, PowerShell installer, and `stellar update`
 
 - [ ] **Preview: fix bash formatting**
+- [ ] **`stellar preview` on Windows**: `cmd/preview.go` only spawns terminals on macOS/Linux and returns "unsupported platform" on Windows. Needs a Windows Terminal / PowerShell branch that opens a shell with `STARSHIP_CONFIG` set.
+- [ ] **Windows packaging**: consider scoop/winget packaging (leftover `stellar.exe.old` from self-update is already cleaned up on the next run).
+- [ ] **CI test job**: the release workflow runs no `go test` today; add one (ideally with a `windows-latest` runner) to guard the copy path natively.
 - [ ] **`stellar publish` command**: Upload local themes directly to stellar-hub
   - Challenge: Need to implement CLI authentication (OAuth flow with browser redirect or API keys)
   - Would read from `~/.config/stellar/<author>/<theme>/<version>.toml`
@@ -233,8 +271,7 @@ When adding new CLI features, please add corresponding E2E tests in `cmd/e2e_tes
   - Requires authentication (same challenge as publish)
   - Upload new version of already published theme
   - Interactive prompts for version notes, dependencies, etc.
-- [ ] Add progress bars for downloads?
-- [x] Add tests
+- [ ] Add progress bars for downloads
 - [ ] Get into nix pckgs
 
 <br />

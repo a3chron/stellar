@@ -27,6 +27,12 @@ var (
 		commit:  "none",
 		date:    "unknown",
 	}
+
+	// LatestReleaseAPIURL is the GitHub API endpoint used to fetch the latest
+	// release's metadata (tag, publish date, HTML URL). It is a var rather
+	// than a const so tests can point it at an httptest server; production
+	// behavior is unchanged since the default is assigned here.
+	LatestReleaseAPIURL = "https://api.github.com/repos/a3chron/stellar/releases/latest"
 )
 
 // SetVersionInfo is called from main to set version information
@@ -128,7 +134,7 @@ func getVersionAsciiArt() string {
 func GetLatestRelease() (*GitHubRelease, error) {
 	client := &http.Client{Timeout: 5 * time.Second}
 
-	resp, err := client.Get("https://api.github.com/repos/a3chron/stellar/releases/latest")
+	resp, err := client.Get(LatestReleaseAPIURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check for updates: %w", err)
 	}

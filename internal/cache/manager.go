@@ -107,6 +107,22 @@ func CleanCache(excludeCurrentPath string) error {
 			continue
 		}
 
+		// Backups of the user's original config live at <author>/backup
+		// (see internal/symlink.backupOriginalConfig) and must survive
+		// cleaning: they're the only copy of whatever starship.toml the user
+		// had before ever running stellar. If clean swept them up, the
+		// restore hint stellar itself prints ("stellar apply
+		// <author>/backup@<version>") would become permanently
+		// unrecoverable, since "backup" isn't a real author on the hub and
+		// there's nothing to re-download. This applies to every author, and
+		// to every clean variant (CleanCache is the only removal path for
+		// both `stellar clean` and `stellar clean --all`; they differ only
+		// in excludeCurrentPath). Backups are still removable explicitly via
+		// `stellar remove <author>/backup[@version]`.
+		if t.Name == theme.BackupThemeName {
+			continue
+		}
+
 		path, err := t.CachePath()
 		if err != nil {
 			continue

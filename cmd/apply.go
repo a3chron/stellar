@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/user"
 	"strings"
 
 	"github.com/a3chron/stellar/internal/api"
@@ -20,14 +19,6 @@ import (
 var forceApply bool
 var updateTheme bool
 
-func getCurrentUsername() string {
-	currentUser, err := user.Current()
-	if err != nil {
-		return "local"
-	}
-	return currentUser.Username
-}
-
 // promptConfirmation asks for user confirmation, defaults to No
 func promptConfirmation(prompt string) bool {
 	reader := bufio.NewReader(os.Stdin)
@@ -40,6 +31,15 @@ func promptConfirmation(prompt string) bool {
 
 	response = strings.ToLower(strings.TrimSpace(response))
 	return response == "y" || response == "yes"
+}
+
+// printBackupNotice tells the user their original starship.toml was preserved
+// and how to restore it. Shared by apply and rollback so both surface the
+// same notice whenever backupOriginalConfig actually creates a backup.
+func printBackupNotice(info *symlink.BackupInfo) {
+	color.Yellow("Your original starship.toml has been backed up to:")
+	color.Yellow("  %s", info.Path)
+	color.Cyan("\nYou can apply it later with: stellar apply %s \n", info.Identifier)
 }
 
 var applyCmd = &cobra.Command{
@@ -174,14 +174,15 @@ var applyCmd = &cobra.Command{
 			return err
 		}
 
-		// 5. Create symlink FIRST (before saving config)
-		// This ensures that if symlink fails, config remains unchanged
-		backupPath, err := symlink.CreateSymlink(themePath)
+		// 5. Apply the theme FIRST (before saving config)
+		// This ensures that if applying fails, config remains unchanged
+		backupInfo, err := symlink.ApplyTheme(themePath, cfg)
 		if err != nil {
 			return err
 		}
 
-		// 6. Update config only AFTER symlink succeeds
+		// 6. Update config only AFTER applying succeeds
+		// (ApplyTheme has already recorded cfg.AppliedHash for the applied file)
 		cfg.PreviousTheme = cfg.CurrentTheme
 		cfg.PreviousPath = cfg.CurrentPath
 		cfg.CurrentTheme = t.String()
@@ -194,10 +195,8 @@ var applyCmd = &cobra.Command{
 		}
 
 		// Notify user if their original config was backed up
-		if backupPath != "" {
-			color.Yellow("Your original starship.toml has been backed up to:")
-			color.Yellow("  %s", backupPath)
-			color.Cyan("\nYou can apply it later with: stellar apply %s/backup \n", getCurrentUsername())
+		if backupInfo != nil {
+			printBackupNotice(backupInfo)
 		}
 
 		color.Green("Applied %s", t)

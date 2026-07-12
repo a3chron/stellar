@@ -143,6 +143,23 @@ func TestParseIdentifier(t *testing.T) {
 	}
 }
 
+// TestIsValidIdentifierRune_MatchesParser guards against drift between
+// IsValidIdentifierRune and the character class ParseIdentifier's regex
+// accepts. For every rune across a broad sample range, building an identifier
+// from that single rune must parse iff IsValidIdentifierRune allows it, so the
+// two definitions stay in lockstep.
+func TestIsValidIdentifierRune_MatchesParser(t *testing.T) {
+	for r := rune(0); r < 0x300; r++ {
+		identifier := string(r) + "/" + string(r)
+		_, err := ParseIdentifier(identifier)
+		parserAccepts := err == nil
+
+		assert.Equal(t, IsValidIdentifierRune(r), parserAccepts,
+			"rune %q (U+%04X): IsValidIdentifierRune=%v but parser-accepts=%v",
+			r, r, IsValidIdentifierRune(r), parserAccepts)
+	}
+}
+
 func TestTheme_String(t *testing.T) {
 	tests := []struct {
 		name     string

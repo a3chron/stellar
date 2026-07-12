@@ -19,6 +19,8 @@ func NewRootCmd() *cobra.Command {
 		Short: "Starship theme manager",
 		Long:  `Stellar - Discover, preview, and apply Starship themes from the community`,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// Best-effort cleanup of files left behind by a previous self-update
+			cleanupUpdateLeftovers()
 			// Initialize stellar directory structure before any command runs
 			return stellarinit.EnsureStellarDir()
 		},

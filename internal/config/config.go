@@ -14,6 +14,13 @@ type Config struct {
 	PreviousTheme    string   `json:"previous_theme,omitempty"`
 	PreviousPath     string   `json:"previous_path,omitempty"`
 	DownloadedThemes []string `json:"downloaded_themes,omitempty"` // ["alice/rainbow", "bob/sunset"]
+	// AppliedHash is the SHA-256 hex hash of the content stellar last wrote to
+	// starship.toml. It lets stellar recognize its own applied file regardless
+	// of apply mode (symlink vs copy) or OS, without depending on how the file
+	// happens to be on disk right now. Absent on configs written before this
+	// field existed; callers must treat that as "unknown" rather than
+	// "mismatch".
+	AppliedHash string `json:"applied_hash,omitempty"`
 }
 
 func ConfigPath() (string, error) {

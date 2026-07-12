@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Check for Windows
+# Check for Windows - use the PowerShell installer instead of this bash script
 if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
-  echo "Windows is not supported yet."
+  echo "On Windows, install stellar with PowerShell instead:"
+  echo "  irm https://raw.githubusercontent.com/a3chron/stellar/main/install.ps1 | iex"
   echo "For more information, see: https://github.com/a3chron/stellar#windows"
   exit 1
 fi
