@@ -5,10 +5,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/a3chron/stellar/internal/config"
 	"github.com/a3chron/stellar/internal/paths"
 	"github.com/a3chron/stellar/internal/testutil"
+	"github.com/a3chron/stellar/internal/theme"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -286,6 +288,39 @@ func TestApplyTheme_VersionedBackup(t *testing.T) {
 	assert.Equal(t, expectedSecondBackup, secondInfo.Path)
 	assert.Equal(t, secondOriginal, env.ReadFile(secondInfo.Path))
 	assert.Equal(t, firstOriginal, env.ReadFile(firstInfo.Path), "earlier backup must stay intact")
+}
+
+// TestApplyTheme_BackupSlotAsFileFails is a regression test for a hang: the
+// backup version-slot search used to loop forever if os.Stat returned a
+// persistent non-ENOENT error. Here <StellarDir>/<BackupAuthor>/backup exists
+// as a plain FILE, so resolving any version slot beneath it fails with ENOTDIR;
+// ApplyTheme must return that error promptly instead of spinning.
+func TestApplyTheme_BackupSlotAsFileFails(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+	t.Setenv(paths.EnvApplyMode, "copy")
+
+	// Create the backup dir path as a regular file, not a directory.
+	backupAsFile := filepath.Join(env.StellarDir, BackupAuthor(), theme.BackupThemeName)
+	require.NoError(t, os.MkdirAll(filepath.Dir(backupAsFile), 0755))
+	require.NoError(t, os.WriteFile(backupAsFile, []byte("not a directory"), 0644))
+
+	// An unmanaged starship.toml so a backup is actually attempted.
+	env.CreateStarshipConfig("# unmanaged original config")
+
+	themePath := env.CreateThemeFile("bob", "sunset", "2.0", testutil.SampleTOML())
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := ApplyTheme(themePath, &config.Config{})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.Error(t, err, "backup slot resolution must fail loudly, not silently skip")
+	case <-time.After(10 * time.Second):
+		t.Fatal("ApplyTheme hung on the backup slot search instead of failing")
+	}
 }
 
 // TestIsManaged exercises the three signals that mark a starship.toml as

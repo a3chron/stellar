@@ -240,9 +240,18 @@ func backupOriginalConfig(configPath string, cfg *config.Config) (info *BackupIn
 		if perr != nil {
 			return nil, fmt.Errorf("failed to resolve backup path: %w", perr)
 		}
-		if _, statErr := os.Stat(candidate); os.IsNotExist(statErr) {
+		// A free slot (ENOENT) ends the search; a slot that already exists
+		// (statErr == nil) moves to the next version. Any other stat error
+		// (e.g. ENOTDIR because the backup dir is actually a plain file, or
+		// EACCES) is persistent and would otherwise spin this loop forever, so
+		// fail loudly instead of hanging.
+		_, statErr := os.Stat(candidate)
+		if os.IsNotExist(statErr) {
 			backupPath = candidate
 			break
+		}
+		if statErr != nil {
+			return nil, fmt.Errorf("failed to probe backup slot %s: %w", candidate, statErr)
 		}
 	}
 
