@@ -36,10 +36,10 @@ func promptConfirmation(prompt string) bool {
 // printBackupNotice tells the user their original starship.toml was preserved
 // and how to restore it. Shared by apply and rollback so both surface the
 // same notice whenever backupOriginalConfig actually creates a backup.
-func printBackupNotice(backupPath string) {
+func printBackupNotice(info *symlink.BackupInfo) {
 	color.Yellow("Your original starship.toml has been backed up to:")
-	color.Yellow("  %s", backupPath)
-	color.Cyan("\nYou can apply it later with: stellar apply %s \n", symlink.BackupIdentifier(backupPath))
+	color.Yellow("  %s", info.Path)
+	color.Cyan("\nYou can apply it later with: stellar apply %s \n", info.Identifier)
 }
 
 var applyCmd = &cobra.Command{
@@ -176,22 +176,17 @@ var applyCmd = &cobra.Command{
 
 		// 5. Apply the theme FIRST (before saving config)
 		// This ensures that if applying fails, config remains unchanged
-		backupPath, err := symlink.ApplyTheme(themePath, cfg)
+		backupInfo, err := symlink.ApplyTheme(themePath, cfg)
 		if err != nil {
 			return err
 		}
 
 		// 6. Update config only AFTER applying succeeds
+		// (ApplyTheme has already recorded cfg.AppliedHash for the applied file)
 		cfg.PreviousTheme = cfg.CurrentTheme
 		cfg.PreviousPath = cfg.CurrentPath
 		cfg.CurrentTheme = t.String()
 		cfg.CurrentPath = themePath
-		// Best-effort: record the hash of what was actually applied so future
-		// runs can recognize this exact file as stellar-managed regardless of
-		// apply mode. Empty on error (e.g. copy mode where a read races with
-		// something external); that just means a future run falls back to the
-		// legacy CurrentPath comparison instead of failing outright.
-		cfg.AppliedHash, _ = symlink.HashFile(themePath)
 
 		if err := cfg.Save(); err != nil {
 			// Symlink succeeded but config save failed
@@ -200,8 +195,8 @@ var applyCmd = &cobra.Command{
 		}
 
 		// Notify user if their original config was backed up
-		if backupPath != "" {
-			printBackupNotice(backupPath)
+		if backupInfo != nil {
+			printBackupNotice(backupInfo)
 		}
 
 		color.Green("Applied %s", t)

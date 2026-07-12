@@ -14,6 +14,7 @@ import (
 
 	"github.com/a3chron/stellar/internal/config"
 	"github.com/a3chron/stellar/internal/paths"
+	"github.com/a3chron/stellar/internal/theme"
 )
 
 func StarshipConfigPath() (string, error) {
@@ -43,10 +44,13 @@ func isSymlink(path string) bool {
 }
 
 // copyFile copies the contents of src to dst, creating or truncating dst.
-func copyFile(src, dst string) (err error) {
+// It returns the SHA-256 hex hash of the copied content, computed while the
+// data streams through so callers that need the hash (e.g. ApplyTheme) don't
+// have to re-read the file afterward.
+func copyFile(src, dst string) (hash string, err error) {
 	source, err := os.Open(src)
 	if err != nil {
-		return fmt.Errorf("failed to open source file: %w", err)
+		return "", fmt.Errorf("failed to open source file: %w", err)
 	}
 	defer func() {
 		if cerr := source.Close(); cerr != nil && err == nil {
@@ -56,7 +60,7 @@ func copyFile(src, dst string) (err error) {
 
 	destination, err := os.Create(dst)
 	if err != nil {
-		return fmt.Errorf("failed to create destination file: %w", err)
+		return "", fmt.Errorf("failed to create destination file: %w", err)
 	}
 	defer func() {
 		if cerr := destination.Close(); cerr != nil && err == nil {
@@ -64,11 +68,12 @@ func copyFile(src, dst string) (err error) {
 		}
 	}()
 
-	if _, err := io.Copy(destination, source); err != nil {
-		return fmt.Errorf("failed to copy file: %w", err)
+	h := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(destination, h), source); err != nil {
+		return "", fmt.Errorf("failed to copy file: %w", err)
 	}
 
-	return nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // filesEqual reports whether both files exist and have identical content.
@@ -158,12 +163,24 @@ func BackupAuthor() string {
 	return sanitizeBackupAuthor(u.Username)
 }
 
+// BackupInfo describes a backup of the user's original config created by
+// backupOriginalConfig/ApplyTheme.
+type BackupInfo struct {
+	// Path is the on-disk location the original config was copied to.
+	Path string
+	// Identifier is the theme identifier ("<author>/backup@<version>") that
+	// targets this exact backup, built at creation time from the same
+	// author/version values used to construct Path (rather than re-derived
+	// from Path later), so it always matches where the backup actually lives.
+	Identifier string
+}
+
 // backupOriginalConfig backs up the user's original starship.toml under
 // ~/.config/stellar/<author>/backup/. Backups are versioned: the first one is
 // 1.0.toml (the user's genuine original), and every later unmanaged
 // starship.toml stellar finds gets the next major version (2.0.toml, 3.0.toml,
 // …) so no earlier backup is ever clobbered.
-// Returns the backup path if a backup was created, empty string otherwise.
+// Returns a *BackupInfo if a backup was created, nil otherwise.
 //
 // The "is this stellar's own file" check is mode-independent: it never asks
 // whether we're in symlink or copy mode, only what's actually on disk and
@@ -177,10 +194,10 @@ func BackupAuthor() string {
 //
 // cfg may be nil, treated the same as an empty config (i.e. no known state,
 // so nothing is recognized as managed and an unmanaged file always backs up).
-func backupOriginalConfig(configPath string, cfg *config.Config) (backupPath string, err error) {
+func backupOriginalConfig(configPath string, cfg *config.Config) (info *BackupInfo, err error) {
 	// Check if the file exists
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return "", nil // No file to back up
+		return nil, nil // No file to back up
 	}
 
 	if cfg == nil {
@@ -191,23 +208,27 @@ func backupOriginalConfig(configPath string, cfg *config.Config) (backupPath str
 		(cfg.AppliedHash != "" && hashOf(configPath) == cfg.AppliedHash) ||
 		(cfg.CurrentTheme != "" && filesEqual(configPath, cfg.CurrentPath))
 	if managed {
-		return "", nil
+		return nil, nil
 	}
 
+	author := BackupAuthor()
+
 	// Construct backup directory: ~/.config/stellar/<author>/backup
-	backupDir, err := paths.ThemeCacheDir(BackupAuthor(), "backup")
+	backupDir, err := paths.ThemeCacheDir(author, "backup")
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve backup directory: %w", err)
+		return nil, fmt.Errorf("failed to resolve backup directory: %w", err)
 	}
 
 	// Pick the first free version slot so an existing backup is never
 	// overwritten. The first backup (1.0.toml) holds the user's real original
 	// config; any later unmanaged starship.toml (e.g. a hand-written one) is
 	// preserved as the next version rather than clobbering the original.
+	var backupPath, version string
 	for n := 1; ; n++ {
-		candidate, perr := paths.ThemeCachePath(BackupAuthor(), "backup", fmt.Sprintf("%d.0", n))
+		version = fmt.Sprintf("%d.0", n)
+		candidate, perr := paths.ThemeCachePath(author, "backup", version)
 		if perr != nil {
-			return "", fmt.Errorf("failed to resolve backup path: %w", perr)
+			return nil, fmt.Errorf("failed to resolve backup path: %w", perr)
 		}
 		if _, statErr := os.Stat(candidate); os.IsNotExist(statErr) {
 			backupPath = candidate
@@ -217,25 +238,20 @@ func backupOriginalConfig(configPath string, cfg *config.Config) (backupPath str
 
 	// Create backup directory
 	if err := os.MkdirAll(backupDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create backup directory: %w", err)
+		return nil, fmt.Errorf("failed to create backup directory: %w", err)
 	}
 
 	// Copy the original file to backup location
-	if err := copyFile(configPath, backupPath); err != nil {
-		return "", fmt.Errorf("failed to back up config: %w", err)
+	if _, err := copyFile(configPath, backupPath); err != nil {
+		return nil, fmt.Errorf("failed to back up config: %w", err)
 	}
 
-	return backupPath, nil
-}
+	// Build the identifier from the same author/version values used above,
+	// via the identifier format theme.Theme.String() already owns, instead of
+	// re-deriving it later by parsing backupPath.
+	identifier := (&theme.Theme{Author: author, Name: "backup", Version: version}).String()
 
-// BackupIdentifier derives the theme identifier ("<author>/backup@<version>")
-// for a backup file from its path alone, so a printed restore hint always
-// matches where the backup was actually written, regardless of how BackupAuthor
-// resolves at call time.
-func BackupIdentifier(backupPath string) string {
-	version := strings.TrimSuffix(filepath.Base(backupPath), ".toml")
-	author := filepath.Base(filepath.Dir(filepath.Dir(backupPath)))
-	return fmt.Sprintf("%s/backup@%s", author, version)
+	return &BackupInfo{Path: backupPath, Identifier: identifier}, nil
 }
 
 // ApplyTheme points ~/.config/starship.toml at the target theme file.
@@ -243,26 +259,29 @@ func BackupIdentifier(backupPath string) string {
 // theme file is copied over starship.toml instead, since Windows handles symlinks
 // poorly.
 //
-// cfg is the caller's loaded config, used only to recognize stellar's own
+// cfg is the caller's loaded config, used to recognize stellar's own
 // previously-applied file so it isn't mistaken for a user's original (see
-// backupOriginalConfig). It may be nil. This function does not read or write
-// cfg's persisted state itself; the caller is responsible for saving it.
+// backupOriginalConfig). It may be nil. On a successful apply, ApplyTheme also
+// records the hash of the applied content into cfg.AppliedHash (when cfg is
+// non-nil) so future calls can recognize this exact file as stellar-managed;
+// this mutates the in-memory cfg, but the caller is still responsible for
+// persisting it via cfg.Save().
 //
 // If an original (non-symlink) starship.toml exists, it's backed up first.
-// Returns the backup path if a backup was created (empty string if no backup was needed).
+// Returns a *BackupInfo if a backup was created (nil if no backup was needed).
 //
 // Uses atomic replacement (temp-then-rename) to prevent data loss:
 // if applying fails, the original config remains intact.
-func ApplyTheme(target string, cfg *config.Config) (backupPath string, err error) {
+func ApplyTheme(target string, cfg *config.Config) (info *BackupInfo, err error) {
 	configPath, err := StarshipConfigPath()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	// Back up original config if it exists and isn't recognized as stellar's own
-	backupPath, err = backupOriginalConfig(configPath, cfg)
+	info, err = backupOriginalConfig(configPath, cfg)
 	if err != nil {
-		return "", fmt.Errorf("failed to backup original config: %w", err)
+		return nil, fmt.Errorf("failed to backup original config: %w", err)
 	}
 
 	// Use atomic replacement to avoid a data-loss window.
@@ -273,14 +292,27 @@ func ApplyTheme(target string, cfg *config.Config) (backupPath string, err error
 	// Remove any stale temp file from a previous failed attempt
 	_ = os.Remove(tempPath)
 
+	// Best-effort: compute the hash of what's actually being applied so it can
+	// be recorded into cfg below. A failure here just leaves appliedHash empty;
+	// that degrades a future run back to the legacy CurrentPath comparison
+	// instead of failing this apply outright.
+	var appliedHash string
+
 	if IsCopyMode() {
-		if err := copyFile(target, tempPath); err != nil {
-			return backupPath, fmt.Errorf("failed to copy theme: %w", err)
+		// copyFile already reads the file in full; compute the hash while the
+		// data streams through instead of re-reading it afterward.
+		h, err := copyFile(target, tempPath)
+		if err != nil {
+			return info, fmt.Errorf("failed to copy theme: %w", err)
 		}
+		appliedHash = h
 	} else {
 		if err := os.Symlink(target, tempPath); err != nil {
-			return backupPath, fmt.Errorf("failed to create symlink: %w", err)
+			return info, fmt.Errorf("failed to create symlink: %w", err)
 		}
+		// In symlink mode there's no copy to piggyback on; hash the target
+		// file once.
+		appliedHash = hashOf(target)
 	}
 
 	// Atomic rename over the target (replaces the destination on POSIX and Windows)
@@ -288,10 +320,18 @@ func ApplyTheme(target string, cfg *config.Config) (backupPath string, err error
 	if err := os.Rename(tempPath, configPath); err != nil {
 		// Clean up temp file on failure
 		_ = os.Remove(tempPath)
-		return backupPath, fmt.Errorf("failed to replace config: %w", err)
+		return info, fmt.Errorf("failed to replace config: %w", err)
 	}
 
-	return backupPath, nil
+	// Best-effort: record the hash of what was actually applied so future
+	// runs can recognize this exact file as stellar-managed regardless of
+	// apply mode. Empty on error; that just means a future run falls back to
+	// the legacy CurrentPath comparison instead of failing outright.
+	if cfg != nil {
+		cfg.AppliedHash = appliedHash
+	}
+
+	return info, nil
 }
 
 // GetCurrentTarget returns the theme file that starship.toml points at.

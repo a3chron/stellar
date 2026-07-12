@@ -3,6 +3,7 @@ package symlink
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/a3chron/stellar/internal/config"
@@ -18,9 +19,9 @@ func TestApplyTheme_NoExistingFile(t *testing.T) {
 
 	themePath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
 
-	backupPath, err := ApplyTheme(themePath, &config.Config{})
+	info, err := ApplyTheme(themePath, &config.Config{})
 	require.NoError(t, err)
-	assert.Empty(t, backupPath, "should not create backup when no existing file")
+	assert.Nil(t, info, "should not create backup when no existing file")
 
 	assert.True(t, env.IsSymlink(env.StarshipPath))
 	assert.Equal(t, themePath, env.ReadSymlink(env.StarshipPath))
@@ -35,15 +36,16 @@ func TestApplyTheme_ExistingRegularFile(t *testing.T) {
 
 	themePath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
 
-	backupPath, err := ApplyTheme(themePath, &config.Config{})
+	info, err := ApplyTheme(themePath, &config.Config{})
 	require.NoError(t, err)
 
-	assert.NotEmpty(t, backupPath)
-	assert.True(t, env.FileExists(backupPath))
-	assert.Equal(t, originalContent, env.ReadFile(backupPath))
+	require.NotNil(t, info)
+	assert.True(t, env.FileExists(info.Path))
+	assert.Equal(t, originalContent, env.ReadFile(info.Path))
 
 	expectedBackupPath := filepath.Join(env.StellarDir, BackupAuthor(), "backup", "1.0.toml")
-	assert.Equal(t, expectedBackupPath, backupPath)
+	assert.Equal(t, expectedBackupPath, info.Path)
+	assert.Equal(t, BackupAuthor()+"/backup@1.0", info.Identifier)
 
 	assert.True(t, env.IsSymlink(env.StarshipPath))
 	assert.Equal(t, themePath, env.ReadSymlink(env.StarshipPath))
@@ -58,10 +60,10 @@ func TestApplyTheme_ExistingSymlink(t *testing.T) {
 	require.NoError(t, err)
 
 	themePath2 := env.CreateThemeFile("bob", "sunset", "2.0", testutil.SampleTOML())
-	backupPath, err := ApplyTheme(themePath2, &config.Config{})
+	info, err := ApplyTheme(themePath2, &config.Config{})
 	require.NoError(t, err)
 
-	assert.Empty(t, backupPath, "should not create backup when replacing symlink")
+	assert.Nil(t, info, "should not create backup when replacing symlink")
 
 	assert.True(t, env.IsSymlink(env.StarshipPath))
 	assert.Equal(t, themePath2, env.ReadSymlink(env.StarshipPath))
@@ -75,9 +77,9 @@ func TestApplyTheme_CopyMode(t *testing.T) {
 
 	themePath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
 
-	backupPath, err := ApplyTheme(themePath, &config.Config{})
+	info, err := ApplyTheme(themePath, &config.Config{})
 	require.NoError(t, err)
-	assert.Empty(t, backupPath, "should not create backup when no existing file")
+	assert.Nil(t, info, "should not create backup when no existing file")
 
 	// In copy mode starship.toml is a regular file, not a symlink
 	assert.True(t, env.FileExists(env.StarshipPath))
@@ -94,13 +96,13 @@ func TestApplyTheme_CopyMode_ExistingRegularFile(t *testing.T) {
 
 	themePath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
 
-	backupPath, err := ApplyTheme(themePath, &config.Config{})
+	info, err := ApplyTheme(themePath, &config.Config{})
 	require.NoError(t, err)
 
 	// Original is backed up before being overwritten by the copy
-	assert.NotEmpty(t, backupPath)
-	assert.True(t, env.FileExists(backupPath))
-	assert.Equal(t, originalContent, env.ReadFile(backupPath))
+	require.NotNil(t, info)
+	assert.True(t, env.FileExists(info.Path))
+	assert.Equal(t, originalContent, env.ReadFile(info.Path))
 
 	assert.False(t, env.IsSymlink(env.StarshipPath))
 	assert.Equal(t, testutil.SampleTOML(), env.ReadFile(env.StarshipPath))
@@ -121,11 +123,11 @@ func TestApplyTheme_CopyMode_ReplacesPreviousCopy(t *testing.T) {
 	require.NoError(t, err)
 
 	themePath2 := env.CreateThemeFile("bob", "sunset", "2.0", testutil.SampleTOMLWithCustom())
-	backupPath, err := ApplyTheme(themePath2, cfg)
+	info, err := ApplyTheme(themePath2, cfg)
 	require.NoError(t, err)
 
 	// A stellar-managed copy should not be backed up when replaced
-	assert.Empty(t, backupPath, "should not back up a config stellar already manages")
+	assert.Nil(t, info, "should not back up a config stellar already manages")
 	assert.False(t, env.IsSymlink(env.StarshipPath))
 	assert.Equal(t, testutil.SampleTOMLWithCustom(), env.ReadFile(env.StarshipPath))
 }
@@ -151,12 +153,13 @@ func TestApplyTheme_CopyMode_BacksUpHandEditedConfig(t *testing.T) {
 	env.CreateStarshipConfig(editedContent)
 
 	themePath2 := env.CreateThemeFile("bob", "sunset", "2.0", testutil.SampleTOMLWithCustom())
-	backupPath, err := ApplyTheme(themePath2, cfg)
+	info, err := ApplyTheme(themePath2, cfg)
 	require.NoError(t, err)
 
 	expectedBackup := filepath.Join(env.StellarDir, BackupAuthor(), "backup", "1.0.toml")
-	assert.Equal(t, expectedBackup, backupPath, "hand-edited config should be backed up")
-	assert.Equal(t, editedContent, env.ReadFile(backupPath))
+	require.NotNil(t, info, "hand-edited config should be backed up")
+	assert.Equal(t, expectedBackup, info.Path)
+	assert.Equal(t, editedContent, env.ReadFile(info.Path))
 	assert.Equal(t, testutil.SampleTOMLWithCustom(), env.ReadFile(env.StarshipPath))
 }
 
@@ -177,12 +180,13 @@ func TestApplyTheme_CopyMode_MissingCachedThemeBacksUp(t *testing.T) {
 	require.NoError(t, err)
 
 	themePath := env.CreateThemeFile("bob", "sunset", "2.0", testutil.SampleTOML())
-	backupPath, err := ApplyTheme(themePath, cfg)
+	info, err := ApplyTheme(themePath, cfg)
 	require.NoError(t, err)
 
 	expectedBackup := filepath.Join(env.StellarDir, BackupAuthor(), "backup", "1.0.toml")
-	assert.Equal(t, expectedBackup, backupPath, "unverifiable config should be backed up")
-	assert.Equal(t, "# unverifiable stellar copy", env.ReadFile(backupPath))
+	require.NotNil(t, info, "unverifiable config should be backed up")
+	assert.Equal(t, expectedBackup, info.Path)
+	assert.Equal(t, "# unverifiable stellar copy", env.ReadFile(info.Path))
 }
 
 // TestApplyTheme_CopyMode_AppliedHashRecognizesCopy is the hash-present
@@ -206,10 +210,10 @@ func TestApplyTheme_CopyMode_AppliedHashRecognizesCopy(t *testing.T) {
 	require.NoError(t, err)
 
 	themePath := env.CreateThemeFile("bob", "sunset", "2.0", testutil.SampleTOML())
-	backupPath, err := ApplyTheme(themePath, cfg)
+	info, err := ApplyTheme(themePath, cfg)
 	require.NoError(t, err)
 
-	assert.Empty(t, backupPath, "applied_hash match should prevent a junk backup")
+	assert.Nil(t, info, "applied_hash match should prevent a junk backup")
 }
 
 // TestApplyTheme_CopyMode_VersionedBackupPreservesOriginal covers the case where
@@ -232,13 +236,14 @@ func TestApplyTheme_CopyMode_VersionedBackupPreservesOriginal(t *testing.T) {
 	env.CreateStarshipConfig("# stellar copy of some theme")
 
 	themePath := env.CreateThemeFile("bob", "sunset", "2.0", testutil.SampleTOML())
-	newBackup, err := ApplyTheme(themePath, &config.Config{})
+	newInfo, err := ApplyTheme(themePath, &config.Config{})
 	require.NoError(t, err)
 
 	// The unrecognized file is preserved as the next version (2.0.toml)...
+	require.NotNil(t, newInfo, "new backup should use the next version")
 	expectedNewBackup := filepath.Join(env.StellarDir, BackupAuthor(), "backup", "2.0.toml")
-	assert.Equal(t, expectedNewBackup, newBackup, "new backup should use the next version")
-	assert.Equal(t, "# stellar copy of some theme", env.ReadFile(newBackup))
+	assert.Equal(t, expectedNewBackup, newInfo.Path)
+	assert.Equal(t, "# stellar copy of some theme", env.ReadFile(newInfo.Path))
 
 	// ...and the genuine original at 1.0.toml is never clobbered.
 	assert.Equal(t, "# PRECIOUS ORIGINAL", env.ReadFile(origBackupPath), "original backup must be preserved")
@@ -257,12 +262,13 @@ func TestApplyTheme_VersionedBackup(t *testing.T) {
 	env.CreateStarshipConfig(firstOriginal)
 
 	themePath1 := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
-	firstBackup, err := ApplyTheme(themePath1, &config.Config{})
+	firstInfo, err := ApplyTheme(themePath1, &config.Config{})
 	require.NoError(t, err)
 
+	require.NotNil(t, firstInfo)
 	expectedFirstBackup := filepath.Join(env.StellarDir, BackupAuthor(), "backup", "1.0.toml")
-	assert.Equal(t, expectedFirstBackup, firstBackup)
-	assert.Equal(t, firstOriginal, env.ReadFile(firstBackup))
+	assert.Equal(t, expectedFirstBackup, firstInfo.Path)
+	assert.Equal(t, firstOriginal, env.ReadFile(firstInfo.Path))
 
 	// The user later replaces starship.toml with a new hand-written config
 	// (a regular file, not the symlink stellar just created).
@@ -271,14 +277,15 @@ func TestApplyTheme_VersionedBackup(t *testing.T) {
 	env.CreateStarshipConfig(secondOriginal)
 
 	themePath2 := env.CreateThemeFile("bob", "sunset", "2.0", testutil.SampleTOML())
-	secondBackup, err := ApplyTheme(themePath2, &config.Config{})
+	secondInfo, err := ApplyTheme(themePath2, &config.Config{})
 	require.NoError(t, err)
 
 	// The second original is preserved as 2.0.toml, and 1.0.toml is unchanged.
+	require.NotNil(t, secondInfo)
 	expectedSecondBackup := filepath.Join(env.StellarDir, BackupAuthor(), "backup", "2.0.toml")
-	assert.Equal(t, expectedSecondBackup, secondBackup)
-	assert.Equal(t, secondOriginal, env.ReadFile(secondBackup))
-	assert.Equal(t, firstOriginal, env.ReadFile(firstBackup), "earlier backup must stay intact")
+	assert.Equal(t, expectedSecondBackup, secondInfo.Path)
+	assert.Equal(t, secondOriginal, env.ReadFile(secondInfo.Path))
+	assert.Equal(t, firstOriginal, env.ReadFile(firstInfo.Path), "earlier backup must stay intact")
 }
 
 func TestSanitizeBackupAuthor(t *testing.T) {
@@ -302,29 +309,38 @@ func TestSanitizeBackupAuthor(t *testing.T) {
 	}
 }
 
-func TestBackupIdentifier(t *testing.T) {
-	tests := []struct {
-		name       string
-		backupPath string
-		want       string
-	}{
-		{
-			name:       "standard path",
-			backupPath: filepath.Join("/home/user/.config/stellar", "kurt", "backup", "1.0.toml"),
-			want:       "kurt/backup@1.0",
-		},
-		{
-			name:       "higher version",
-			backupPath: filepath.Join("/home/user/.config/stellar", "john-doe", "backup", "3.0.toml"),
-			want:       "john-doe/backup@3.0",
-		},
-	}
+// TestBackupInfo_Identifier verifies that BackupInfo.Identifier is built from
+// the same author/version values used to construct BackupInfo.Path (rather
+// than re-derived by parsing the path afterward), and that it always targets
+// the backup that was actually just written.
+func TestBackupInfo_Identifier(t *testing.T) {
+	testutil.RequireSymlinks(t)
+	env := testutil.SetupTestEnv(t)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, BackupIdentifier(tt.backupPath))
-		})
-	}
+	// First unmanaged config: backed up as version 1.0.
+	env.CreateStarshipConfig("# FIRST ORIGINAL")
+	themePath1 := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+	firstInfo, err := ApplyTheme(themePath1, &config.Config{})
+	require.NoError(t, err)
+
+	require.NotNil(t, firstInfo)
+	assert.Equal(t, BackupAuthor()+"/backup@1.0", firstInfo.Identifier)
+
+	// A second, later unmanaged config gets the next version (2.0), and its
+	// identifier tracks that version rather than staying pinned at 1.0.
+	require.NoError(t, os.Remove(env.StarshipPath))
+	env.CreateStarshipConfig("# SECOND ORIGINAL")
+	themePath2 := env.CreateThemeFile("bob", "sunset", "2.0", testutil.SampleTOML())
+	secondInfo, err := ApplyTheme(themePath2, &config.Config{})
+	require.NoError(t, err)
+
+	require.NotNil(t, secondInfo)
+	assert.Equal(t, BackupAuthor()+"/backup@2.0", secondInfo.Identifier)
+
+	// The identifier must parse back into a theme that targets the file
+	// actually written to disk.
+	parsedVersion := strings.TrimSuffix(filepath.Base(secondInfo.Path), ".toml")
+	assert.True(t, strings.HasSuffix(secondInfo.Identifier, "/backup@"+parsedVersion))
 }
 
 func TestGetCurrentTarget(t *testing.T) {
