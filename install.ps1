@@ -4,6 +4,11 @@
 
 $ErrorActionPreference = "Stop"
 
+# 3072 = Tls12; needed on WinPS 5.1 with old .NET defaults (TLS 1.0 only),
+# which otherwise fail Invoke-WebRequest against github.com with
+# "Could not create SSL/TLS secure channel". -bor preserves existing protocols.
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072
+
 # Configurable install directory (override with $env:STELLAR_INSTALL_DIR)
 $BinDir = if ($env:STELLAR_INSTALL_DIR) { $env:STELLAR_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA "stellar\bin" }
 
@@ -91,7 +96,12 @@ $EnvKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $tru
 $RawPath = $EnvKey.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
 
 $Normalized = $BinDir.TrimEnd('\')
-$PathEntries = ($RawPath -split ';') | ForEach-Object { $_.TrimEnd('\') } | Where-Object { $_ }
+# Compare the EXPANDED form of each raw entry against the expanded $BinDir, so
+# an existing entry stored unexpanded (e.g. %LOCALAPPDATA%\stellar\bin) is
+# still recognized as a match instead of getting a redundant duplicate
+# appended. $RawPath itself stays untouched (see below) so REG_EXPAND_SZ
+# entries are preserved as-is when we rewrite the value.
+$PathEntries = ($RawPath -split ';') | ForEach-Object { [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') } | Where-Object { $_ }
 if ($PathEntries -notcontains $Normalized) {
     Write-Host ""
     Write-Host "Adding $BinDir to your user PATH"
@@ -99,15 +109,10 @@ if ($PathEntries -notcontains $Normalized) {
     # PowerShell 5.1 has no ternary operator, so use if/else explicitly.
     if ($RawPath) {
         $NewPath = "$RawPath;$BinDir"
-    }
-    else {
-        $NewPath = $BinDir
-    }
-
-    if ($RawPath) {
         $Kind = $EnvKey.GetValueKind('Path')
     }
     else {
+        $NewPath = $BinDir
         $Kind = [Microsoft.Win32.RegistryValueKind]::ExpandString
     }
 
