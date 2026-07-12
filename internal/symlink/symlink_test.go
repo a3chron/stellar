@@ -467,6 +467,78 @@ func TestIsSymlink(t *testing.T) {
 	assert.False(t, isSymlink("/nonexistent/path"))
 }
 
+// TestRenameWithRetry exercises the Windows transient-lock retry path on Linux
+// by flipping the renameRetryEnabled flag and injecting renameSleep, so no
+// actual sleeping happens. os.Rename is driven to fail/succeed by controlling
+// whether the source file exists at each attempt.
+func TestRenameWithRetry(t *testing.T) {
+	t.Run("transient failure eventually succeeds", func(t *testing.T) {
+		dir := t.TempDir()
+		src := filepath.Join(dir, "src")
+		dst := filepath.Join(dir, "dst")
+
+		// Force the retry path on even though the test runs on Linux.
+		oldFlag := renameRetryEnabled
+		renameRetryEnabled = true
+		defer func() { renameRetryEnabled = oldFlag }()
+
+		// The source doesn't exist yet, so the first os.Rename fails. On the
+		// first backoff sleep we create it, standing in for a transient
+		// Defender/indexer lock clearing so the next attempt succeeds.
+		sleeps := 0
+		oldSleep := renameSleep
+		renameSleep = func(time.Duration) {
+			sleeps++
+			if sleeps == 1 {
+				require.NoError(t, os.WriteFile(src, []byte("binary"), 0644))
+			}
+		}
+		defer func() { renameSleep = oldSleep }()
+
+		require.NoError(t, RenameWithRetry(src, dst))
+		assert.Equal(t, 1, sleeps, "should have retried exactly once before succeeding")
+		assert.FileExists(t, dst)
+	})
+
+	t.Run("persistent failure returns the last error", func(t *testing.T) {
+		dir := t.TempDir()
+		src := filepath.Join(dir, "never-appears")
+		dst := filepath.Join(dir, "dst")
+
+		oldFlag := renameRetryEnabled
+		renameRetryEnabled = true
+		defer func() { renameRetryEnabled = oldFlag }()
+
+		sleeps := 0
+		oldSleep := renameSleep
+		renameSleep = func(time.Duration) { sleeps++ }
+		defer func() { renameSleep = oldSleep }()
+
+		err := RenameWithRetry(src, dst)
+		require.Error(t, err, "a source that never appears must ultimately fail")
+		assert.Equal(t, len(renameRetryBackoff), sleeps, "should exhaust every backoff step before giving up")
+	})
+
+	t.Run("no retry or sleep when the flag is off", func(t *testing.T) {
+		dir := t.TempDir()
+		src := filepath.Join(dir, "missing")
+		dst := filepath.Join(dir, "dst")
+
+		oldFlag := renameRetryEnabled
+		renameRetryEnabled = false
+		defer func() { renameRetryEnabled = oldFlag }()
+
+		sleeps := 0
+		oldSleep := renameSleep
+		renameSleep = func(time.Duration) { sleeps++ }
+		defer func() { renameSleep = oldSleep }()
+
+		err := RenameWithRetry(src, dst)
+		require.Error(t, err, "single-shot rename of a missing source must fail")
+		assert.Zero(t, sleeps, "the non-Windows path must not sleep or retry")
+	})
+}
+
 func TestHashFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sample.toml")

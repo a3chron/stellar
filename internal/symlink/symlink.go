@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/a3chron/stellar/internal/config"
 	"github.com/a3chron/stellar/internal/paths"
@@ -19,6 +20,68 @@ import (
 
 func StarshipConfigPath() (string, error) {
 	return paths.StarshipConfig()
+}
+
+// renameRetryEnabled gates RenameWithRetry's retry loop. It is true only on
+// Windows, the one platform where os.Rename intermittently fails on a lock that
+// clears by itself; everywhere else a rename either succeeds or fails for a
+// real, persistent reason, so retrying would only add latency. It's a
+// package-level var (rather than an inline runtime.GOOS check) purely so a unit
+// test running on Linux can flip it on and exercise the retry path.
+var renameRetryEnabled = runtime.GOOS == "windows"
+
+// renameRetryBackoff is the sequence of sleeps between rename attempts when the
+// retry path is active. Four retries at 50/100/200/400ms cap the total added
+// latency of a genuinely persistent failure at 750ms — comfortably under a
+// second and a half — while giving a transient Defender/indexer lock ample time
+// to clear. It's a package-level var so a test can shrink or replace it.
+var renameRetryBackoff = []time.Duration{
+	50 * time.Millisecond,
+	100 * time.Millisecond,
+	200 * time.Millisecond,
+	400 * time.Millisecond,
+}
+
+// renameSleep is the sleep used between rename retries, injectable so a unit
+// test can verify the retry/backoff behavior without actually sleeping.
+var renameSleep = time.Sleep
+
+// RenameWithRetry renames oldpath to newpath, retrying a few times on Windows
+// when the rename fails.
+//
+// Why: on Windows os.Rename intermittently fails with ERROR_SHARING_VIOLATION
+// or ERROR_ACCESS_DENIED when another process holds a brief lock on the source
+// or destination. Windows Defender's real-time scan and the Search Indexer both
+// do exactly this to freshly written files and brand-new .exe binaries — which
+// is precisely what stellar renames when applying a theme (a just-written temp
+// file) or installing an update (a just-downloaded executable). These locks
+// clear on their own within milliseconds, so a short, bounded retry turns an
+// intermittent, user-visible failure into a silent success.
+//
+// On every other OS renameRetryEnabled is false, so this is a single os.Rename
+// with no sleep and no retry — behavior there is identical to calling os.Rename
+// directly.
+//
+// We retry on any error rather than trying to match specific Windows error
+// codes: the sharing-violation codes don't map cleanly onto Go's portable error
+// types, and retrying indiscriminately is safe here because a genuinely
+// persistent failure still returns promptly — the total backoff is bounded by
+// renameRetryBackoff.
+func RenameWithRetry(oldpath, newpath string) error {
+	err := os.Rename(oldpath, newpath)
+	if err == nil || !renameRetryEnabled {
+		return err
+	}
+
+	// Retry with growing backoff, returning the last error if none succeed.
+	for _, backoff := range renameRetryBackoff {
+		renameSleep(backoff)
+		if err = os.Rename(oldpath, newpath); err == nil {
+			return nil
+		}
+	}
+
+	return err
 }
 
 // IsCopyMode reports whether themes are applied by copying the file instead of
@@ -335,8 +398,10 @@ func ApplyTheme(target string, cfg *config.Config) (info *BackupInfo, err error)
 	}
 
 	// Atomic rename over the target (replaces the destination on POSIX and Windows)
-	// If this fails, the original file/symlink is still intact
-	if err := os.Rename(tempPath, configPath); err != nil {
+	// If this fails, the original file/symlink is still intact. RenameWithRetry
+	// rides out the transient Defender/indexer locks Windows takes on the
+	// freshly written temp file (a no-op single rename everywhere else).
+	if err := RenameWithRetry(tempPath, configPath); err != nil {
 		// Clean up temp file on failure
 		_ = os.Remove(tempPath)
 		return info, fmt.Errorf("failed to replace config: %w", err)

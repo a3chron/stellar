@@ -22,6 +22,19 @@ import (
 // behavior is unchanged since the default is assigned here.
 var LatestReleaseURL = "https://github.com/a3chron/stellar/releases/latest/download"
 
+// updateTempPrefix is the filename prefix for the in-progress download temp
+// file that "stellar update" writes next to the running binary. It is the
+// single string removeUpdateLeftovers matches on to garbage-collect the
+// leftovers of an interrupted update.
+const updateTempPrefix = ".stellar-update-"
+
+// updateRecoveryPrefix is the filename prefix for a checksum-verified download
+// that survived a double-failure in replaceExecutable and must be preserved for
+// manual recovery. It deliberately does NOT begin with updateTempPrefix, so
+// removeUpdateLeftovers never matches — and thus never deletes — the exact file
+// the recovery instructions tell the user to move into place by hand.
+const updateRecoveryPrefix = ".stellar-recovery-"
+
 // fetchChecksums downloads checksums.txt from GitHub releases
 func fetchChecksums() (string, error) {
 	checksumsURL := fmt.Sprintf("%s/checksums.txt", LatestReleaseURL)
@@ -169,7 +182,7 @@ var updateCmd = &cobra.Command{
 		}
 
 		// Write to a temporary file in the same directory as the current binary
-		tmpFile, err := os.CreateTemp(filepath.Dir(execPath), ".stellar-update-*")
+		tmpFile, err := os.CreateTemp(filepath.Dir(execPath), updateTempPrefix+"*")
 		if err != nil {
 			return err
 		}
@@ -265,6 +278,14 @@ func cleanupUpdateLeftovers() {
 // race for any update that finishes in under an hour. The ".old" removal stays
 // unconditional: it's the previous update's now-replaced binary, never a file
 // an in-flight update is still writing.
+//
+// Recovery files (updateRecoveryPrefix, ".stellar-recovery-*") are deliberately
+// NOT matched here and are never auto-removed, regardless of age. They exist
+// only after a replaceExecutable double-failure has preserved a checksum-
+// verified download the user must move into place by hand; the recovery error
+// points straight at one, and the user may not re-run stellar for days. Their
+// distinct prefix keeps this cleanup from ever eating them out from under those
+// instructions.
 func removeUpdateLeftovers(execPath string) {
 	_ = os.Remove(execPath + ".old")
 
@@ -274,7 +295,7 @@ func removeUpdateLeftovers(execPath string) {
 		return
 	}
 	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), ".stellar-update-") {
+		if !strings.HasPrefix(entry.Name(), updateTempPrefix) {
 			continue
 		}
 		info, ierr := entry.Info()
@@ -305,8 +326,11 @@ func removeUpdateLeftovers(execPath string) {
 // putting the new binary in place fails, we try to restore the original
 // binary automatically. If even that restore fails (execPath now missing
 // entirely), newPath is deliberately NOT removed — it is the only verified
-// copy of the new binary — and the error tells the user exactly what to
-// rename to recover.
+// copy of the new binary. Instead it is moved to a ".stellar-recovery-*" name
+// (see preserveForRecovery) that removeUpdateLeftovers will never auto-delete,
+// and the error tells the user exactly what to rename to recover. All the
+// Windows renames go through symlink.RenameWithRetry to ride out the transient
+// Defender/indexer locks that plague freshly written .exe files.
 func replaceExecutable(newPath, execPath string) error {
 	if runtime.GOOS != "windows" {
 		if err := os.Rename(newPath, execPath); err != nil {
@@ -319,14 +343,14 @@ func replaceExecutable(newPath, execPath string) error {
 	oldPath := execPath + ".old"
 	_ = os.Remove(oldPath) // clear any leftover from a previous update
 
-	if err := os.Rename(execPath, oldPath); err != nil {
+	if err := symlink.RenameWithRetry(execPath, oldPath); err != nil {
 		// execPath was never touched, so the verified download isn't needed.
 		_ = os.Remove(newPath)
 		return err
 	}
 
-	if err := os.Rename(newPath, execPath); err != nil {
-		if restoreErr := os.Rename(oldPath, execPath); restoreErr == nil {
+	if err := symlink.RenameWithRetry(newPath, execPath); err != nil {
+		if restoreErr := symlink.RenameWithRetry(oldPath, execPath); restoreErr == nil {
 			// Original binary restored; the verified download isn't needed.
 			_ = os.Remove(newPath)
 			return err
@@ -336,6 +360,14 @@ func replaceExecutable(newPath, execPath string) error {
 		// (the verified new binary) and oldPath (the previous binary) and
 		// tell the user exactly how to recover instead of silently deleting
 		// the one file that's known-good.
+		//
+		// Move the download to a ".stellar-recovery-*" name first: it currently
+		// sits under the ".stellar-update-*" temp name, which a later stellar
+		// run's removeUpdateLeftovers deletes once it is older than an hour. A
+		// recovery file has to outlive that window (the user may not re-run
+		// stellar for days), so it is renamed to the prefix cleanup never
+		// touches. The error then references wherever the file actually landed.
+		recoveryPath := preserveForRecovery(newPath)
 		return fmt.Errorf(
 			"failed to install update and could not restore the previous binary: %w\n\n"+
 				"Your files were not deleted, but manual recovery is needed:\n"+
@@ -343,11 +375,42 @@ func replaceExecutable(newPath, execPath string) error {
 				"  - previous binary:     %s\n\n"+
 				"To finish the update yourself, run:\n"+
 				"  move %q %q",
-			err, newPath, oldPath, newPath, execPath,
+			err, recoveryPath, oldPath, recoveryPath, execPath,
 		)
 	}
 
 	// New binary is now in place; the old one stays locked until this process
 	// exits, so it is left for cleanupUpdateLeftovers on the next stellar run.
 	return nil
+}
+
+// recoveryPathFor maps a preserved ".stellar-update-<suffix>" download to the
+// ".stellar-recovery-<suffix>" name it should be moved to before the recovery
+// error is shown. The unique suffix is carried across unchanged so two
+// concurrent double-failures can't collide on the same recovery filename. If
+// tempPath somehow lacks the update prefix (it always has it in practice, being
+// the os.CreateTemp name), the base name is used as the suffix so the result is
+// still a well-formed recovery sibling in the same directory.
+func recoveryPathFor(tempPath string) string {
+	suffix := strings.TrimPrefix(filepath.Base(tempPath), updateTempPrefix)
+	return filepath.Join(filepath.Dir(tempPath), updateRecoveryPrefix+suffix)
+}
+
+// preserveForRecovery renames the checksum-verified download at tempPath to its
+// ".stellar-recovery-*" sibling so a later removeUpdateLeftovers run can never
+// delete it (that cleanup only matches ".stellar-update-*"). It returns the
+// path the file actually ended up at, so the caller's recovery instructions
+// always point at the real location.
+//
+// This only runs on replaceExecutable's Windows double-failure path, so it uses
+// the same transient-lock retry as the renames there. If the rename still fails,
+// it falls back to the original tempPath: keeping the file under its temp name
+// is far better than losing it, and the worst case is a much-later cleanup
+// removing it rather than the user recovering it in time.
+func preserveForRecovery(tempPath string) string {
+	recoveryPath := recoveryPathFor(tempPath)
+	if err := symlink.RenameWithRetry(tempPath, recoveryPath); err != nil {
+		return tempPath
+	}
+	return recoveryPath
 }

@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,6 +103,59 @@ func TestRemoveUpdateLeftovers_BracketDirName(t *testing.T) {
 
 	assert.NoFileExists(t, oldBinary, "leftover .old binary should be removed even when the dir name contains glob metacharacters")
 	assert.NoFileExists(t, tmpUpdate, "leftover update temp file should be removed even when the dir name contains glob metacharacters")
+}
+
+// TestRemoveUpdateLeftovers_RecoveryFilePreserved is the guard for Fix 2: a
+// ".stellar-recovery-*" file (the checksum-verified download a double-failure
+// preserved for manual recovery) must never be auto-removed, even when it is
+// older than the 1h cutoff, while a stale ".stellar-update-*" temp file next to
+// it is still cleaned up. Without the distinct prefix, cleanup would silently
+// delete the exact file the recovery instructions point at.
+func TestRemoveUpdateLeftovers_RecoveryFilePreserved(t *testing.T) {
+	dir := t.TempDir()
+
+	execPath := filepath.Join(dir, "stellar.exe")
+	staleUpdate := filepath.Join(dir, ".stellar-update-abc123")
+	recovery := filepath.Join(dir, ".stellar-recovery-abc123")
+
+	require.NoError(t, os.WriteFile(staleUpdate, []byte("partial download"), 0644))
+	require.NoError(t, os.WriteFile(recovery, []byte("verified binary awaiting manual move"), 0644))
+
+	// Age both past the 1h cutoff: the stale update temp is fair game, the
+	// recovery file must survive regardless of age.
+	ageFile(t, staleUpdate)
+	ageFile(t, recovery)
+
+	removeUpdateLeftovers(execPath)
+
+	assert.NoFileExists(t, staleUpdate, "a stale update temp file should still be removed")
+	assert.FileExists(t, recovery, "a recovery file must never be auto-removed, even when old")
+}
+
+// TestRecoveryPathFor verifies the temp-to-recovery name mapping keeps the
+// unique suffix and switches to a prefix removeUpdateLeftovers never matches.
+func TestRecoveryPathFor(t *testing.T) {
+	tempPath := filepath.Join("/some/bin dir", ".stellar-update-987654")
+
+	got := recoveryPathFor(tempPath)
+
+	assert.Equal(t, filepath.Join("/some/bin dir", ".stellar-recovery-987654"), got)
+	assert.False(t, strings.HasPrefix(filepath.Base(got), updateTempPrefix),
+		"recovery name must not carry the cleanup-matched update prefix")
+}
+
+// TestPreserveForRecovery verifies the download is renamed to its recovery
+// sibling and the returned path reflects where the file actually ended up.
+func TestPreserveForRecovery(t *testing.T) {
+	dir := t.TempDir()
+	tempPath := filepath.Join(dir, ".stellar-update-555")
+	require.NoError(t, os.WriteFile(tempPath, []byte("verified binary"), 0644))
+
+	got := preserveForRecovery(tempPath)
+
+	assert.Equal(t, filepath.Join(dir, ".stellar-recovery-555"), got)
+	assert.NoFileExists(t, tempPath, "the temp-named file should have been renamed away")
+	assert.FileExists(t, got, "the file should now live at its recovery path")
 }
 
 // TestCleanupUpdateLeftovers_RemovesRealArtifacts verifies the
