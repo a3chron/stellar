@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/a3chron/stellar/internal/symlink"
 	"github.com/fatih/color"
@@ -257,8 +258,13 @@ func cleanupUpdateLeftovers() {
 //
 // This runs from PersistentPreRunE, before the update command creates its own
 // temp file, so it never deletes an in-progress download of the current
-// process. A concurrent "stellar update" in another process could theoretically
-// have its temp file removed here; that race is accepted as unlikely.
+// process. To also protect a concurrent "stellar update" in another process, a
+// ".stellar-update-*" temp file is only removed once it is older than an hour:
+// an in-flight download is touched continuously and always younger than that,
+// while a genuine leftover from an interrupted update is not. This closes the
+// race for any update that finishes in under an hour. The ".old" removal stays
+// unconditional: it's the previous update's now-replaced binary, never a file
+// an in-flight update is still writing.
 func removeUpdateLeftovers(execPath string) {
 	_ = os.Remove(execPath + ".old")
 
@@ -268,9 +274,19 @@ func removeUpdateLeftovers(execPath string) {
 		return
 	}
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".stellar-update-") {
-			_ = os.Remove(filepath.Join(dir, entry.Name()))
+		if !strings.HasPrefix(entry.Name(), ".stellar-update-") {
+			continue
 		}
+		info, ierr := entry.Info()
+		if ierr != nil {
+			// Can't tell how old it is; leave it rather than risk deleting a
+			// concurrent update's in-flight download.
+			continue
+		}
+		if time.Since(info.ModTime()) < time.Hour {
+			continue
+		}
+		_ = os.Remove(filepath.Join(dir, entry.Name()))
 	}
 }
 
