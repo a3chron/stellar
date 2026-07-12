@@ -43,18 +43,12 @@ Some [basic usage](#basic-usage) covered here, for more info, run `stellar --hel
 > On Linux and macOS, stellar applies a theme by **symlinking** `~/.config/starship.toml` to the cached
 > config, which gives you hot-reload while editing local configs.
 >
-> Windows handles symlinks poorly (they need Developer Mode or admin privileges), so on Windows stellar
-> **copies** the theme file over `starship.toml` instead. Everything works the same, with one caveat:
-> editing a local theme file does **not** live-update `starship.toml` (it's a copy, not a link) — just
+> Windows is bad at symlinks (they need Developer Mode or admin privileges), so on Windows stellar
+> **copies** the theme file over `starship.toml` instead. Everything works the same, except
+> editing a local theme file, it does **not** live-update `starship.toml` (it's a copy, not a link). Just
 > re-run `stellar apply <author>/<theme>` after editing.
 >
 > You can force copy mode anywhere (e.g. for testing) by setting `STELLAR_APPLY_MODE=copy`.
->
-> **Release note:** the backup folder name is now the sanitized OS username (e.g. `john.doe` -> `john-doe`,
-> spaces and other characters `starship.toml`'s theme-identifier parser rejects are replaced with `-`), so a
-> raw Windows `DOMAIN\user`-style name always produces a valid, restorable `stellar apply <author>/backup`
-> hint. Backups created before this change under the old, unsanitized folder name are left in place at
-> their original path and are not migrated automatically.
 
 ## Why use
 
@@ -132,16 +126,17 @@ Backups are versioned. If stellar later finds another unmanaged `starship.toml` 
 
 This also works in copy mode (the Windows default): if you edit the applied `starship.toml` directly, stellar notices the file no longer matches the theme it applied and backs up your edits before applying the next theme.
 
-Stellar recognizes its own applied file by a checksum recorded in `~/.config/stellar/config.json`, independent of apply mode (symlink or copy) or OS. This means editing a cached theme file directly and re-applying it, or running `stellar clean`/`stellar clean --all` and then applying another theme, never creates a spurious backup — only a config file you actually hand-edited yourself gets preserved.
+Stellar recognizes its own applied file by a checksum recorded in `~/.config/stellar/config.json`, independent of apply mode (symlink or copy) or OS. This means editing a cached theme file directly and re-applying it, or running `stellar clean`/`stellar clean --all` and then applying another theme, never creates a spurious backup, only a config file you actually hand-edited yourself gets preserved.
 
-`stellar clean` (with or without `--all`) never deletes your backups either — they're preserved automatically and only removed if you explicitly run `stellar remove <username>/backup`.
+`stellar clean` (with or without `--all`) never deletes your backups either. 
+They're preserved automatically and only removed if you explicitly run `stellar remove <username>/backup`.
 
 This ensures your carefully crafted config is never lost :) You can apply the newest backup anytime with:
 ```bash
 stellar apply <username>/backup
 ```
 
-To restore a specific one — for instance your very first original config — pin the version:
+To restore a specific one, for instance your very first original config, just pin the version:
 ```bash
 stellar apply <username>/backup@1.0
 ```
@@ -174,7 +169,7 @@ Because stellar is using a symlink to the currently selected config file, you ge
 
 > [!NOTE]
 > On Windows stellar copies the config instead of symlinking it (see the [Windows note](#windows)),
-> so editing a local theme file does **not** hot-reload — re-run `stellar apply <author>/<theme>` after editing.
+> so editing a local theme file does **not** hot-reload, you'll have to re-run `stellar apply <author>/<theme>` after editing.
 
 ## Troubleshooting
 
@@ -272,7 +267,7 @@ When adding new CLI features, please add corresponding E2E tests in `cmd/e2e_tes
   - Upload new version of already published theme
   - Interactive prompts for version notes, dependencies, etc.
 - [ ] Add progress bars for downloads
-- [ ] Get into nix pckgs
+- [ ] Get stellar into nix pckgs / nixify
 
 <br />
 
