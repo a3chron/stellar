@@ -3,7 +3,9 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
+	"time"
 
 	"github.com/a3chron/stellar/internal/testutil"
 	"github.com/stretchr/testify/assert"
@@ -182,6 +184,52 @@ func TestClient_StatusCodes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNewCompletionClient(t *testing.T) {
+	client := NewCompletionClient()
+	assert.Equal(t, BaseURL, client.baseURL)
+	assert.Equal(t, 2*time.Second, client.httpClient.Timeout)
+}
+
+func TestClient_SearchThemesByAuthorName(t *testing.T) {
+	var gotQuery url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"themes":[
+			{"author":{"id":"a1","name":"alice","image":null},"name":"Rainbow","slug":"rainbow","latestVersion":"1.2"},
+			{"author":{"id":"a1","name":"alice","image":null},"name":"Sunset","slug":"sunset","latestVersion":"2.0"}
+		]}`))
+	}))
+	defer server.Close()
+
+	client := NewClientWithURL(server.URL)
+
+	summaries, err := client.SearchThemesByAuthorName("ali")
+	require.NoError(t, err)
+	require.Len(t, summaries, 2)
+
+	assert.Equal(t, "ali", gotQuery.Get("authorName"))
+	assert.Equal(t, "100", gotQuery.Get("limit"))
+	assert.Equal(t, "name", gotQuery.Get("sort"))
+
+	assert.Equal(t, "alice", summaries[0].Author.Name)
+	assert.Equal(t, "rainbow", summaries[0].Slug)
+	assert.Equal(t, "1.2", summaries[0].LatestVersion)
+	assert.Equal(t, "sunset", summaries[1].Slug)
+}
+
+func TestClient_SearchThemesByAuthorName_NonOK(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	client := NewClientWithURL(server.URL)
+
+	_, err := client.SearchThemesByAuthorName("ali")
+	assert.Error(t, err)
 }
 
 func TestClientWithEnvOverride(t *testing.T) {

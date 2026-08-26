@@ -50,6 +50,28 @@ Some [basic usage](#basic-usage) covered here, for more info, run `stellar --hel
 >
 > You can force copy mode anywhere (e.g. for testing) by setting `STELLAR_APPLY_MODE=copy`.
 
+### Shell completion
+
+stellar ships tab completion for commands, flags, and theme identifiers
+(`author/slug@version`). Candidates come from your local theme cache, so
+completion is always instant and works offline. If you want hub themes
+suggested too, set `STELLAR_COMPLETION_ONLINE=1` (adds up to ~2s of network
+lookup per completion; degrades silently to local-only when offline).
+
+```bash
+# bash
+stellar completion bash > ~/.local/share/bash-completion/completions/stellar
+
+# zsh
+stellar completion zsh > "${fpath[1]}/_stellar"
+
+# fish
+stellar completion fish > ~/.config/fish/completions/stellar.fish
+
+# powershell (add to $PROFILE)
+stellar completion powershell | Out-String | Invoke-Expression
+```
+
 ## Why use
 
 **Before:** Getting good starship configs so far was mostly random, from someones github dotfiles, searching for something entirely else...  

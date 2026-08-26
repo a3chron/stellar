@@ -36,6 +36,39 @@ func IsValidIdentifierRune(r rune) bool {
 		r == '_' || r == '-'
 }
 
+// versionRe matches a complete version as ParseIdentifier accepts it, minus
+// the optional "v" prefix (which the parser strips). Kept next to the
+// identifier regex below so the two can't drift.
+var versionRe = regexp.MustCompile(`^([0-9]+\.[0-9]+|latest)$`)
+
+// IsValidSegment reports whether s is a complete, usable author or theme
+// segment: non-empty and made up entirely of IsValidIdentifierRune runes.
+//
+// Callers that emit segments they didn't parse themselves (e.g. shell
+// completion listing cache directories, or reading an API response) must gate
+// on this, so a name that ParseIdentifier would reject is never handed back to
+// the user as a suggestion - and so a hostile name can't smuggle control
+// characters into a terminal.
+func IsValidSegment(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if !IsValidIdentifierRune(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// IsValidVersion reports whether s is a complete version ParseIdentifier
+// accepts ("1.2" or "latest"), without the optional "v" prefix. Same contract
+// as IsValidSegment: gate emitted versions on it, since a cache directory can
+// hold arbitrary *.toml filenames.
+func IsValidVersion(s string) bool {
+	return versionRe.MatchString(s)
+}
+
 // ParseIdentifier parses "alice/rainbow@1.2", "alice/rainbow@latest", or "alice/rainbow"
 func ParseIdentifier(identifier string) (*Theme, error) {
 	// Normalize: remove leading/trailing whitespace
@@ -105,16 +138,16 @@ func FindLatestLocalVersion(themeDir string) (string, error) {
 
 	// Sort by semver descending, "latest" goes last as fallback
 	sort.Slice(versions, func(i, j int) bool {
-		return compareSemver(versions[i], versions[j]) > 0
+		return CompareSemver(versions[i], versions[j]) > 0
 	})
 
 	return versions[0], nil
 }
 
-// compareSemver compares two version strings.
+// CompareSemver compares two version strings.
 // Returns >0 if a > b, <0 if a < b, 0 if equal.
 // Non-numeric versions (like "latest") are sorted to the end.
-func compareSemver(a, b string) int {
+func CompareSemver(a, b string) int {
 	aMajor, aMinor, aOk := parseSemver(a)
 	bMajor, bMinor, bOk := parseSemver(b)
 
