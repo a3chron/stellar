@@ -2,6 +2,7 @@ package theme
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/a3chron/stellar/internal/testutil"
@@ -337,8 +338,9 @@ func TestTheme_CachePath(t *testing.T) {
 	path, err := theme.CachePath()
 	require.NoError(t, err)
 
-	// Should be relative to the test stellar home
-	expected := env.StellarDir + "/alice/rainbow/1.2.toml"
+	// Should be relative to the test stellar home. filepath.Join, not "/", so
+	// the expectation uses the platform's separator like CachePath does.
+	expected := filepath.Join(env.StellarDir, "alice", "rainbow", "1.2.toml")
 	assert.Equal(t, expected, path)
 }
 
@@ -354,7 +356,7 @@ func TestTheme_CacheDir(t *testing.T) {
 	dir, err := theme.CacheDir()
 	require.NoError(t, err)
 
-	expected := env.StellarDir + "/alice/rainbow"
+	expected := filepath.Join(env.StellarDir, "alice", "rainbow")
 	assert.Equal(t, expected, dir)
 }
 

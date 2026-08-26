@@ -402,7 +402,9 @@ func TestE2E_Apply(t *testing.T) {
 
 		configContent := env.ReadFile(filepath.Join(env.StellarDir, "config.json"))
 		assert.Contains(t, configContent, "local/mytheme@1.0")
-		assert.Contains(t, configContent, themePath)
+		// The config is JSON, so a Windows path is stored with its separators
+		// escaped - compare against the encoded form, not the raw path.
+		assert.Contains(t, configContent, strings.ReplaceAll(themePath, `\`, `\\`))
 		assert.Contains(t, configContent, "applied_hash", "config should record the hash of the applied theme")
 	})
 

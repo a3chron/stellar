@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/a3chron/stellar/internal/paths"
@@ -117,9 +118,17 @@ func (e *TestEnv) CreateThemeFile(author, name, version, content string) string 
 	return themePath
 }
 
-// CreateConfig creates a config.json file in the test stellar directory
+// CreateConfig creates a config.json file in the test stellar directory.
+//
+// Callers build the JSON by concatenating filesystem paths into it, which is
+// invalid JSON on Windows: a path like C:\Users\... contains \U, and encoding/
+// json rejects it as a bad escape ("invalid character 'U' in string escape
+// code"). Backslashes are therefore escaped here rather than at all ~30 call
+// sites. No test wants a real JSON escape sequence in this content, so this
+// is safe - but if one ever does, it needs to pass \\ itself.
 func (e *TestEnv) CreateConfig(content string) string {
 	configPath := filepath.Join(e.StellarDir, "config.json")
+	content = strings.ReplaceAll(content, `\`, `\\`)
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
 		e.t.Fatalf("failed to write config file: %v", err)
 	}

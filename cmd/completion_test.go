@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -416,7 +417,14 @@ func TestCompletion_MalformedLocalCacheEntries_Filtered(t *testing.T) {
 	// untrusted hub response: names outside the identifier character class
 	// must never be suggested - an ANSI escape especially, since candidates
 	// are printed straight into the user's terminal.
-	for _, name := range []string{".git", "my author", "evil\x1b[31muser"} {
+	hostile := []string{".git", "my author"}
+	if runtime.GOOS != "windows" {
+		// Windows rejects control characters in filenames outright, so the
+		// escape-sequence case can only be set up (and can only arise) on a
+		// Unix filesystem.
+		hostile = append(hostile, "evil\x1b[31muser")
+	}
+	for _, name := range hostile {
 		require.NoError(t, os.MkdirAll(filepath.Join(env.StellarDir, name), 0o755))
 	}
 
