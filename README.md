@@ -278,8 +278,7 @@ When adding new CLI features, please add corresponding E2E tests in `cmd/e2e_tes
 - [ ] **Preview: fix bash formatting**
 - [ ] **`stellar preview` on Windows**: `cmd/preview.go` only spawns terminals on macOS/Linux and returns "unsupported platform" on Windows. Needs a Windows Terminal / PowerShell branch that opens a shell with `STARSHIP_CONFIG` set.
 - [ ] **Windows packaging**: consider scoop/winget packaging (leftover `stellar.exe.old` from self-update is already cleaned up on the next run).
-- [x] **CI test job**: the release workflow now runs `go vet` and `go test` (with `-race` on Linux) before goreleaser, so a tag can't publish a failing build.
-  - Still open: the `windows-latest` leg is marked `continue-on-error` because the suite has never been run on a native Windows runner. Once it's been green once, drop that line so the copy path is genuinely guarded.
+- [x] **CI test job**: `go vet` and `go test` (with `-race` on Linux) run on every pull request and again before goreleaser, on both `ubuntu-latest` and `windows-latest`, so a tag can't publish a failing build and the copy path is guarded natively.
 - [ ] **`stellar publish` command**: Upload local themes directly to stellar-hub
   - Challenge: Need to implement CLI authentication (OAuth flow with browser redirect or API keys)
   - Would read from `~/.config/stellar/<author>/<theme>/<version>.toml`

@@ -27,11 +27,6 @@ jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Windows is advisory for now: the suite has never been run on a native
-    # Windows runner, so a failure there must not be discovered while cutting
-    # a release. Once it has been green once, delete this line so the copy
-    # path is genuinely guarded.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:
