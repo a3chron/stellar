@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/a3chron/stellar/internal/paths"
@@ -17,23 +18,35 @@ type Client struct {
 	httpClient *http.Client
 }
 
-func NewClient() *Client {
+// newClient builds a Client pointed at baseURL with the given request
+// timeout. It's the single place that assembles the http.Client so
+// NewClient, NewClientWithURL and NewCompletionClient can't drift apart on
+// anything but the two knobs that actually differ between them.
+func newClient(baseURL string, timeout time.Duration) *Client {
 	return &Client{
-		baseURL: paths.APIURL(BaseURL),
+		baseURL: baseURL,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: timeout,
 		},
 	}
 }
 
+func NewClient() *Client {
+	return newClient(paths.APIURL(BaseURL), 30*time.Second)
+}
+
 // NewClientWithURL creates a client with a specific base URL (for testing)
 func NewClientWithURL(baseURL string) *Client {
-	return &Client{
-		baseURL: baseURL,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
-	}
+	return newClient(baseURL, 30*time.Second)
+}
+
+// NewCompletionClient creates a client tuned for shell completion requests.
+// Shell completion runs synchronously on every keystroke in the user's
+// shell, so it must never block waiting on a slow or unreachable
+// stellar-hub: callers are expected to treat any error from this client as
+// "degrade to local-only completions" rather than surfacing it.
+func NewCompletionClient() *Client {
+	return newClient(paths.APIURL(BaseURL), 2*time.Second)
 }
 
 // Author info nested in theme response
@@ -65,6 +78,16 @@ type VersionInfo struct {
 	VersionNotes string   `json:"versionNotes"`
 	Dependencies []string `json:"dependencies"`
 	CreatedAt    string   `json:"createdAt"`
+}
+
+// ThemeSummary is the lightweight theme shape returned by GET /api/themes,
+// used by shell completion (internal/completion) to look up hub authors and
+// theme slugs without downloading a full ThemeInfo per candidate.
+type ThemeSummary struct {
+	Author        AuthorInfo `json:"author"`
+	Name          string     `json:"name"`
+	Slug          string     `json:"slug"`
+	LatestVersion string     `json:"latestVersion"`
 }
 
 func (c *Client) FetchThemeConfig(author, name, version string) (string, error) {
@@ -114,6 +137,34 @@ func (c *Client) GetThemeInfo(author, name string) (*ThemeInfo, error) {
 	}
 
 	return &info, nil
+}
+
+// SearchThemesByAuthorName queries GET /api/themes for themes whose author
+// name matches authorName as a prefix (server-side match), used by shell
+// completion to suggest hub authors/themes that aren't in the local cache.
+func (c *Client) SearchThemesByAuthorName(authorName string) ([]ThemeSummary, error) {
+	reqURL := fmt.Sprintf("%s/api/themes?authorName=%s&limit=100&sort=name", c.baseURL, url.QueryEscape(authorName))
+
+	resp, err := c.httpClient.Get(reqURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search themes: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server returned %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Themes []ThemeSummary `json:"themes"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	return result.Themes, nil
 }
 
 func (c *Client) IncrementDownloadCount(author, name string) error {

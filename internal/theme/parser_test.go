@@ -2,6 +2,7 @@ package theme
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/a3chron/stellar/internal/testutil"
@@ -11,85 +12,85 @@ import (
 
 func TestParseIdentifier(t *testing.T) {
 	tests := []struct {
-		name        string
-		identifier  string
-		wantAuthor  string
-		wantName    string
-		wantVersion string
+		name         string
+		identifier   string
+		wantAuthor   string
+		wantName     string
+		wantVersion  string
 		wantExplicit bool
-		wantErr     bool
+		wantErr      bool
 	}{
 		{
-			name:        "simple identifier",
-			identifier:  "alice/rainbow",
-			wantAuthor:  "alice",
-			wantName:    "rainbow",
-			wantVersion: "latest",
+			name:         "simple identifier",
+			identifier:   "alice/rainbow",
+			wantAuthor:   "alice",
+			wantName:     "rainbow",
+			wantVersion:  "latest",
 			wantExplicit: false,
-			wantErr:     false,
+			wantErr:      false,
 		},
 		{
-			name:        "with version",
-			identifier:  "alice/rainbow@1.2",
-			wantAuthor:  "alice",
-			wantName:    "rainbow",
-			wantVersion: "1.2",
+			name:         "with version",
+			identifier:   "alice/rainbow@1.2",
+			wantAuthor:   "alice",
+			wantName:     "rainbow",
+			wantVersion:  "1.2",
 			wantExplicit: true,
-			wantErr:     false,
+			wantErr:      false,
 		},
 		{
-			name:        "with v prefix version",
-			identifier:  "alice/rainbow@v1.2",
-			wantAuthor:  "alice",
-			wantName:    "rainbow",
-			wantVersion: "1.2",
+			name:         "with v prefix version",
+			identifier:   "alice/rainbow@v1.2",
+			wantAuthor:   "alice",
+			wantName:     "rainbow",
+			wantVersion:  "1.2",
 			wantExplicit: true,
-			wantErr:     false,
+			wantErr:      false,
 		},
 		{
-			name:        "with latest version",
-			identifier:  "alice/rainbow@latest",
-			wantAuthor:  "alice",
-			wantName:    "rainbow",
-			wantVersion: "latest",
+			name:         "with latest version",
+			identifier:   "alice/rainbow@latest",
+			wantAuthor:   "alice",
+			wantName:     "rainbow",
+			wantVersion:  "latest",
 			wantExplicit: true,
-			wantErr:     false,
+			wantErr:      false,
 		},
 		{
-			name:        "with underscores",
-			identifier:  "some_user/my_theme",
-			wantAuthor:  "some_user",
-			wantName:    "my_theme",
-			wantVersion: "latest",
+			name:         "with underscores",
+			identifier:   "some_user/my_theme",
+			wantAuthor:   "some_user",
+			wantName:     "my_theme",
+			wantVersion:  "latest",
 			wantExplicit: false,
-			wantErr:     false,
+			wantErr:      false,
 		},
 		{
-			name:        "with hyphens",
-			identifier:  "some-user/my-theme",
-			wantAuthor:  "some-user",
-			wantName:    "my-theme",
-			wantVersion: "latest",
+			name:         "with hyphens",
+			identifier:   "some-user/my-theme",
+			wantAuthor:   "some-user",
+			wantName:     "my-theme",
+			wantVersion:  "latest",
 			wantExplicit: false,
-			wantErr:     false,
+			wantErr:      false,
 		},
 		{
-			name:        "with numbers",
-			identifier:  "user123/theme456",
-			wantAuthor:  "user123",
-			wantName:    "theme456",
-			wantVersion: "latest",
+			name:         "with numbers",
+			identifier:   "user123/theme456",
+			wantAuthor:   "user123",
+			wantName:     "theme456",
+			wantVersion:  "latest",
 			wantExplicit: false,
-			wantErr:     false,
+			wantErr:      false,
 		},
 		{
-			name:        "with whitespace",
-			identifier:  "  alice/rainbow  ",
-			wantAuthor:  "alice",
-			wantName:    "rainbow",
-			wantVersion: "latest",
+			name:         "with whitespace",
+			identifier:   "  alice/rainbow  ",
+			wantAuthor:   "alice",
+			wantName:     "rainbow",
+			wantVersion:  "latest",
 			wantExplicit: false,
-			wantErr:     false,
+			wantErr:      false,
 		},
 		{
 			name:       "invalid - no slash",
@@ -249,7 +250,7 @@ func TestCompareSemver(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := compareSemver(tt.a, tt.b)
+			result := CompareSemver(tt.a, tt.b)
 			if tt.expect > 0 {
 				assert.Greater(t, result, 0, "expected %s > %s", tt.a, tt.b)
 			} else if tt.expect < 0 {
@@ -337,8 +338,9 @@ func TestTheme_CachePath(t *testing.T) {
 	path, err := theme.CachePath()
 	require.NoError(t, err)
 
-	// Should be relative to the test stellar home
-	expected := env.StellarDir + "/alice/rainbow/1.2.toml"
+	// Should be relative to the test stellar home. filepath.Join, not "/", so
+	// the expectation uses the platform's separator like CachePath does.
+	expected := filepath.Join(env.StellarDir, "alice", "rainbow", "1.2.toml")
 	assert.Equal(t, expected, path)
 }
 
@@ -354,7 +356,7 @@ func TestTheme_CacheDir(t *testing.T) {
 	dir, err := theme.CacheDir()
 	require.NoError(t, err)
 
-	expected := env.StellarDir + "/alice/rainbow"
+	expected := filepath.Join(env.StellarDir, "alice", "rainbow")
 	assert.Equal(t, expected, dir)
 }
 

@@ -9,8 +9,8 @@ import (
 )
 
 type Config struct {
-	CurrentTheme     string   `json:"current_theme"`      // "alice/rainbow@1.2"
-	CurrentPath      string   `json:"current_path"`       // Full path to .toml
+	CurrentTheme     string   `json:"current_theme"` // "alice/rainbow@1.2"
+	CurrentPath      string   `json:"current_path"`  // Full path to .toml
 	PreviousTheme    string   `json:"previous_theme,omitempty"`
 	PreviousPath     string   `json:"previous_path,omitempty"`
 	DownloadedThemes []string `json:"downloaded_themes,omitempty"` // ["alice/rainbow", "bob/sunset"]

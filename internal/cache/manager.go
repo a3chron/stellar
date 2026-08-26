@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/a3chron/stellar/internal/paths"
@@ -162,6 +163,101 @@ func CleanCache(excludeCurrentPath string) error {
 	}
 
 	return nil
+}
+
+// ListAuthors returns the names of author directories under the stellar
+// cache (e.g. ["alice", "bob"]), sorted, skipping non-directories and
+// config.json. Returns (nil, nil) if the stellar home directory doesn't
+// exist yet: shell completion (internal/completion) calls this on every
+// keystroke and cobra doesn't guarantee the directory has been created by
+// the time "__complete" runs, so a missing cache must read as "no authors"
+// rather than an error.
+func ListAuthors() ([]string, error) {
+	cacheDir, err := paths.StellarHome()
+	if err != nil {
+		return nil, err
+	}
+
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var authors []string
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == "config.json" {
+			continue
+		}
+		authors = append(authors, e.Name())
+	}
+
+	sort.Strings(authors)
+	return authors, nil
+}
+
+// ListAuthorThemes returns the theme slug directories cached under author
+// (e.g. ["rainbow", "sunset"]), sorted. Returns (nil, nil) if the author
+// directory doesn't exist (see ListAuthors for why that's not an error).
+func ListAuthorThemes(author string) ([]string, error) {
+	cacheDir, err := paths.StellarHome()
+	if err != nil {
+		return nil, err
+	}
+
+	entries, err := os.ReadDir(filepath.Join(cacheDir, author))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var slugs []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		slugs = append(slugs, e.Name())
+	}
+
+	sort.Strings(slugs)
+	return slugs, nil
+}
+
+// ListThemeVersions returns the cached version strings for author/name,
+// newest first (theme.CompareSemver, descending), e.g. ["1.2", "1.1", "1.0"].
+// Returns (nil, nil) if the theme directory doesn't exist (see ListAuthors
+// for why that's not an error).
+func ListThemeVersions(author, name string) ([]string, error) {
+	cacheDir, err := paths.StellarHome()
+	if err != nil {
+		return nil, err
+	}
+
+	entries, err := os.ReadDir(filepath.Join(cacheDir, author, name))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var versions []string
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".toml" {
+			continue
+		}
+		versions = append(versions, strings.TrimSuffix(e.Name(), ".toml"))
+	}
+
+	sort.Slice(versions, func(i, j int) bool {
+		return theme.CompareSemver(versions[i], versions[j]) > 0
+	})
+
+	return versions, nil
 }
 
 func TmpCachePath(t *theme.Theme) string {
