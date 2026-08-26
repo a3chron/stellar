@@ -82,11 +82,11 @@ run_go_tests() {
         case "$action" in
             pass)
                 echo -e "  ${GREEN}PASS${NC}  $test"
-                ((passed++))
+                passed=$((passed + 1))
                 ;;
             fail)
                 echo -e "  ${RED}FAIL${NC}  $test"
-                ((failed++))
+                failed=$((failed + 1))
                 failed_tests+=("$pkg $test")
                 ;;
         esac
