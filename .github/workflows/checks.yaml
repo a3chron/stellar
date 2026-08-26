@@ -1,0 +1,70 @@
+name: Checks
+
+# Reusable: called by ci.yaml on pushes and pull requests, and by
+# release.yaml before goreleaser publishes anything. Defined once here so the
+# checks that gate a release are exactly the ones a PR had to pass.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # Read from go.mod so CI can never drift from what the module
+          # requires (it says 1.25.5, so a pinned 1.24 silently made every
+          # job download a newer toolchain first).
+          go-version-file: go.mod
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Windows is advisory for now: the suite has never been run on a native
+    # Windows runner, so a failure there must not be discovered while cutting
+    # a release. Once it has been green once, delete this line so the copy
+    # path is genuinely guarded.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # -race needs a C toolchain, which the Windows runner doesn't have
+          # set up by default.
+          - os: ubuntu-latest
+            raceflag: "-race"
+          - os: windows-latest
+            raceflag: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: go vet
+        run: go vet ./...
+      # Contract tests are behind the `contract` build tag and hit the live
+      # hub, so they stay out of CI.
+      - name: go test
+        run: go test ${{ matrix.raceflag }} ./...
+
+  modules:
+    name: modules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Check mod files
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+      - name: Verify module hashes
+        run: go mod verify
