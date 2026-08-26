@@ -1076,7 +1076,9 @@ func TestE2E_Rollback(t *testing.T) {
 		currentPath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
 		require.NoError(t, os.Symlink(currentPath, env.StarshipPath))
 
-		previousPath := env.StellarDir + "/testuser/sample-theme/1.2.toml"
+		// filepath.Join, not "/": this is compared against the symlink target
+		// stellar itself writes, which uses the platform separator.
+		previousPath := filepath.Join(env.StellarDir, "testuser", "sample-theme", "1.2.toml")
 
 		config := `{
   "current_theme": "alice/rainbow@1.0",
