@@ -16,11 +16,11 @@ import (
 
 // TestEnv holds the test environment configuration
 type TestEnv struct {
-	t          *testing.T
-	RootDir    string // Root temp directory
-	StellarDir string // ~/.config/stellar equivalent
+	t            *testing.T
+	RootDir      string // Root temp directory
+	StellarDir   string // ~/.config/stellar equivalent
 	StarshipPath string // ~/.config/starship.toml equivalent
-	TmpDir     string // /tmp/stellar equivalent
+	TmpDir       string // /tmp/stellar equivalent
 
 	// Original env values for restoration
 	origEnv map[string]string
