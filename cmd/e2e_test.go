@@ -1565,6 +1565,8 @@ func resetFlags() {
 	updateTheme = false
 	forceRemove = false
 	cleanAll = false
+	uninstallYes = false
+	uninstallKeepConfig = false
 }
 
 // pinVersion sets versionInfo to a known non-dev version (IsDev() gates

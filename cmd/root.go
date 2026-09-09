@@ -62,6 +62,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(rollbackCmd)
 	cmd.AddCommand(removeCmd)
 	cmd.AddCommand(updateCmd)
+	cmd.AddCommand(uninstallCmd)
 
 	return cmd
 }

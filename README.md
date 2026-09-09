@@ -72,6 +72,51 @@ stellar completion fish > ~/.config/fish/completions/stellar.fish
 stellar completion powershell | Out-String | Invoke-Expression
 ```
 
+### Uninstall
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/a3chron/stellar/main/uninstall.sh | bash
+```
+```powershell
+# Windows (also removes the install dir from your PATH)
+irm https://raw.githubusercontent.com/a3chron/stellar/main/uninstall.ps1 | iex
+```
+
+Both scripts run `stellar uninstall --yes`, which you can also call yourself:
+
+```bash
+stellar uninstall                # asks for confirmation first
+stellar uninstall --yes          # no questions asked
+stellar uninstall --keep-config  # remove only the binary, keep ~/.config/stellar
+```
+
+Uninstalling detaches your prompt first: if `starship.toml` is a symlink into
+stellar's cache, it is replaced by a plain copy of the theme you have applied,
+so starship keeps working. Then `~/.config/stellar` (cached themes, config and
+the [backups of your original config](#automatic-backup-of-your-original-config))
+and the binary are removed. Restore a backup with `stellar apply <username>/backup`
+*before* uninstalling if you want your original prompt back, or pass
+`--keep-config` to keep the directory.
+
+### Telemetry
+
+stellar sends one small anonymous report to the hub on its first run, again
+after a version change (so `stellar update` and re-installs count as updates,
+not new installs), and once more on `stellar uninstall`. It contains:
+
+- a random install id (a UUID minted on first run, stored in `~/.config/stellar/config.json`)
+- whether stellar was freshly installed or already present when reporting began
+- the CLI version and the previously reported version
+- your OS and CPU architecture (`linux`/`darwin`/`windows`, `amd64`/`arm64`)
+
+Nothing else - no theme names, no paths, no usernames, and the hub does not
+store your IP. There is no periodic ping: a machine that never changes version
+is never heard from again. Dev builds (`go run .`) never send anything.
+
+To opt out, set `STELLAR_NO_TELEMETRY=1` or the cross-tool `DO_NOT_TRACK=1`
+in your shell config. Deleting `install_id` from `config.json` resets the id.
+
 ## Why use
 
 **Before:** Getting good starship configs so far was mostly random, from someones github dotfiles, searching for something entirely else...  
@@ -125,6 +170,9 @@ stellar rollback
 
 # Update CLI
 stellar update
+
+# Remove stellar from this machine (see Uninstall above)
+stellar uninstall
 ```
 
 ### Stellar Hub
