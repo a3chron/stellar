@@ -20,6 +20,12 @@ const (
 	// EnvApplyMode overrides how themes are applied ("symlink" or "copy").
 	// Defaults to symlink on Unix and copy on Windows.
 	EnvApplyMode = "STELLAR_APPLY_MODE"
+	// EnvNoTelemetry disables the anonymous install/version report to the hub
+	// when set to any non-empty value.
+	EnvNoTelemetry = "STELLAR_NO_TELEMETRY"
+	// EnvDoNotTrack is the cross-tool convention (consoledonottrack.com); a
+	// value of "1" disables the report the same way EnvNoTelemetry does.
+	EnvDoNotTrack = "DO_NOT_TRACK"
 )
 
 // StellarHome returns the stellar configuration directory.

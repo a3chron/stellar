@@ -21,6 +21,19 @@ type Config struct {
 	// field existed; callers must treat that as "unknown" rather than
 	// "mismatch".
 	AppliedHash string `json:"applied_hash,omitempty"`
+
+	// Telemetry identity (see internal/telemetry). InstallID is a random UUID
+	// minted once per install; InstallKind records whether config.json was
+	// absent when it was minted ("install") or already existed from a build
+	// that predates telemetry ("existing"). Both are fixed for the life of the
+	// install so a retried report is classified the same way every time.
+	InstallID   string `json:"install_id,omitempty"`
+	InstallKind string `json:"install_kind,omitempty"`
+	// ReportedVersion / ReportedAt describe the last report the hub accepted.
+	// A report is only sent when the running version differs from
+	// ReportedVersion, so an empty value means "never reported yet".
+	ReportedVersion string `json:"reported_version,omitempty"`
+	ReportedAt      string `json:"reported_at,omitempty"`
 }
 
 func ConfigPath() (string, error) {

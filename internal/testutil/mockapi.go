@@ -33,12 +33,27 @@ type MockVersion struct {
 	CreatedAt     string
 }
 
+// MockPing mirrors the body the CLI posts to /api/cli/ping. It is declared
+// here rather than reusing api.CLIPing because internal/api's own tests import
+// testutil, so testutil importing api would be an import cycle.
+type MockPing struct {
+	ID       string `json:"id"`
+	Kind     string `json:"kind"`
+	Event    string `json:"event"`
+	Version  string `json:"version"`
+	Previous string `json:"previous"`
+	OS       string `json:"os"`
+	Arch     string `json:"arch"`
+}
+
 // MockAPIHandler implements http.Handler for testing
 type MockAPIHandler struct {
 	mu             sync.Mutex
 	themes         map[string]*MockTheme // key: "author/slug"
 	DownloadCounts map[string]int        // Track download increments for verification
 	RequestCounts  map[string]int        // Track requests received, keyed by r.URL.Path
+	pings          []MockPing            // Install reports received, in order
+	pingStatus     int                   // Status to answer pings with; 0 means 204
 }
 
 // NewMockAPIHandler creates a new mock API handler
@@ -72,6 +87,13 @@ func (h *MockAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if len(parts) == 1 && parts[0] == "themes" {
 		h.handleSearchThemes(w, r)
+		return
+	}
+
+	// Must come before the author/slug parsing below, or /api/cli/ping would
+	// be read as author "cli", slug "ping" and 404.
+	if len(parts) == 2 && parts[0] == "cli" && parts[1] == "ping" {
+		h.handleCLIPing(w, r)
 		return
 	}
 
@@ -294,6 +316,49 @@ func (h *MockAPIHandler) handleIncrementDownload(w http.ResponseWriter, key stri
 
 	// Return 204 No Content (matching the real API)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleCLIPing records an install report, answering 204 like the hub (or the
+// status set via SetPingStatus, for failure tests).
+func (h *MockAPIHandler) handleCLIPing(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var ping MockPing
+	if err := json.NewDecoder(r.Body).Decode(&ping); err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	h.mu.Lock()
+	h.pings = append(h.pings, ping)
+	status := h.pingStatus
+	h.mu.Unlock()
+
+	if status != 0 {
+		w.WriteHeader(status)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Pings returns a copy of every install report received so far, in order.
+func (h *MockAPIHandler) Pings() []MockPing {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]MockPing, len(h.pings))
+	copy(out, h.pings)
+	return out
+}
+
+// SetPingStatus makes subsequent /api/cli/ping requests answer with code
+// (e.g. 500) instead of 204. Reports are still recorded.
+func (h *MockAPIHandler) SetPingStatus(code int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.pingStatus = code
 }
 
 // GetDownloadCount returns the current download count for a theme

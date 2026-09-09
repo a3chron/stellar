@@ -30,7 +30,23 @@ func NewRootCmd() *cobra.Command {
 			// Best-effort cleanup of files left behind by a previous self-update
 			cleanupUpdateLeftovers()
 			// Initialize stellar directory structure before any command runs
-			return stellarinit.EnsureStellarDir()
+			created, err := stellarinit.EnsureStellarDir()
+			if err != nil {
+				return err
+			}
+			// Kick off the anonymous install report (see cmd/telemetry.go). It
+			// runs in the background and is joined in PersistentPostRunE, so
+			// the user's command never waits on the hub.
+			startTelemetry(created)
+			return nil
+		},
+		// Cobra runs only the nearest PersistentPostRun*, and no subcommand
+		// defines one, so this fires after every command that ran to
+		// completion. It does NOT run when RunE returned an error - the report
+		// is then simply retried on the next run, since nothing was recorded.
+		PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
+			finishTelemetry()
+			return nil
 		},
 		// Custom version template (will be set by SetVersionInfo)
 		Version: "dev",
