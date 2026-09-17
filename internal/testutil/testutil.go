@@ -61,6 +61,15 @@ func SetupTestEnv(t *testing.T) *TestEnv {
 	env.origEnv[paths.EnvTmpDir] = os.Getenv(paths.EnvTmpDir)
 	env.origEnv[paths.EnvAPIURL] = os.Getenv(paths.EnvAPIURL)
 	env.origEnv[paths.EnvApplyMode] = os.Getenv(paths.EnvApplyMode)
+	env.origEnv[paths.EnvNoTelemetry] = os.Getenv(paths.EnvNoTelemetry)
+	env.origEnv[paths.EnvDoNotTrack] = os.Getenv(paths.EnvDoNotTrack)
+
+	// Telemetry is off by default in tests. Any test that pins a non-dev
+	// version (the update tests do) would otherwise POST a real install
+	// report to production stellar-hub - and wait up to 2s for it. Tests of
+	// the telemetry itself call EnableTelemetry() after SetupTestEnv.
+	_ = os.Setenv(paths.EnvNoTelemetry, "1")
+	_ = os.Unsetenv(paths.EnvDoNotTrack)
 
 	// Set test env variables
 	_ = os.Setenv(paths.EnvStellarHome, env.StellarDir)
@@ -95,6 +104,15 @@ func (e *TestEnv) cleanup() {
 			_ = os.Setenv(key, value)
 		}
 	}
+}
+
+// EnableTelemetry lifts the default opt-out set by SetupTestEnv (and clears a
+// developer's own DO_NOT_TRACK) so a test can observe install reports against
+// the mock API. Always pair it with SetupMockAPI - never let a test report to
+// production. The original values are restored by the usual cleanup.
+func (e *TestEnv) EnableTelemetry() {
+	_ = os.Unsetenv(paths.EnvNoTelemetry)
+	_ = os.Unsetenv(paths.EnvDoNotTrack)
 }
 
 // SetupMockAPI starts a mock API server and sets STELLAR_API_URL

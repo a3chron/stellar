@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -47,6 +48,60 @@ func NewClientWithURL(baseURL string) *Client {
 // "degrade to local-only completions" rather than surfacing it.
 func NewCompletionClient() *Client {
 	return newClient(paths.APIURL(BaseURL), 2*time.Second)
+}
+
+// NewTelemetryClient creates a client for the anonymous install report. The
+// report rides along an ordinary user command, so it gets the same 2s budget
+// as completion: a slow hub may cost the user a moment, never the command.
+func NewTelemetryClient() *Client {
+	return newClient(paths.APIURL(BaseURL), 2*time.Second)
+}
+
+// CLIPing is the anonymous install report sent to POST /api/cli/ping. Every
+// field is random (ID), an enum, or a version string; nothing in it can
+// identify a person or a machine. The hub upserts by ID, so a retried report
+// is idempotent.
+type CLIPing struct {
+	ID string `json:"id"`
+	// Kind is "install" or "existing" (see config.Config.InstallKind).
+	Kind string `json:"kind"`
+	// Event is "report" (first run or version change) or "uninstall".
+	Event string `json:"event"`
+	// Version is the running CLI version without a "v" prefix.
+	Version string `json:"version"`
+	// Previous is the last version the hub accepted, "" on the first report.
+	Previous string `json:"previous"`
+	OS       string `json:"os"`
+	Arch     string `json:"arch"`
+}
+
+// SendCLIPing posts p to the hub. Any non-2xx status is an error, so callers
+// leave their "reported" marker untouched and retry on the next run.
+func (c *Client) SendCLIPing(p CLIPing) error {
+	body, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/api/cli/ping", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("cli ping rejected (status: %d)", resp.StatusCode)
+	}
+
+	return nil
 }
 
 // Author info nested in theme response

@@ -1433,20 +1433,6 @@ func TestE2E_Preview(t *testing.T) {
 func TestE2E_Update(t *testing.T) {
 	binaryName := platformBinaryName()
 
-	// pinVersion sets versionInfo to a known non-dev version (IsDev() gates
-	// all update-checking on the version not being "dev") and restores the
-	// original values via t.Cleanup. versionInfo is an unexported package-level
-	// var in this same package, so the test can read/write it directly instead
-	// of needing an exported getter.
-	pinVersion := func(t *testing.T, version string) {
-		t.Helper()
-		origVersion, origCommit, origDate := versionInfo.version, versionInfo.commit, versionInfo.date
-		SetVersionInfo(version, "testcommit", "2024-01-01")
-		t.Cleanup(func() {
-			SetVersionInfo(origVersion, origCommit, origDate)
-		})
-	}
-
 	// pointAtServer starts an httptest server for mux, redirects both URL
 	// seams at it, and restores the real GitHub URLs afterward.
 	pointAtServer := func(t *testing.T, mux *http.ServeMux) {
@@ -1579,6 +1565,22 @@ func resetFlags() {
 	updateTheme = false
 	forceRemove = false
 	cleanAll = false
+	uninstallYes = false
+	uninstallKeepConfig = false
+}
+
+// pinVersion sets versionInfo to a known non-dev version (IsDev() gates
+// update-checking and telemetry on the version not being "dev") and restores
+// the original values via t.Cleanup. versionInfo is an unexported
+// package-level var in this same package, so the test can read/write it
+// directly instead of needing an exported getter.
+func pinVersion(t *testing.T, version string) {
+	t.Helper()
+	origVersion, origCommit, origDate := versionInfo.version, versionInfo.commit, versionInfo.date
+	SetVersionInfo(version, "testcommit", "2024-01-01")
+	t.Cleanup(func() {
+		SetVersionInfo(origVersion, origCommit, origDate)
+	})
 }
 
 // backupBinaryForUpdateTest saves the current test binary's bytes and mode

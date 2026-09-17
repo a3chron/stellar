@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -245,4 +246,64 @@ func TestClientWithEnvOverride(t *testing.T) {
 	info, err := client.GetThemeInfo("testuser", "sample-theme")
 	require.NoError(t, err)
 	assert.Equal(t, "Sample Theme", info.Name)
+}
+
+func TestClient_SendCLIPing(t *testing.T) {
+	ping := CLIPing{
+		ID:       "11111111-2222-4333-8444-555555555555",
+		Kind:     "install",
+		Event:    "report",
+		Version:  "1.2.3",
+		Previous: "",
+		OS:       "linux",
+		Arch:     "amd64",
+	}
+
+	t.Run("success on 204", func(t *testing.T) {
+		mockAPI := testutil.CreateDefaultMockAPI()
+		server := httptest.NewServer(mockAPI)
+		defer server.Close()
+
+		client := NewClientWithURL(server.URL)
+		require.NoError(t, client.SendCLIPing(ping))
+
+		pings := mockAPI.Pings()
+		require.Len(t, pings, 1)
+		assert.Equal(t, ping.ID, pings[0].ID)
+		assert.Equal(t, "install", pings[0].Kind)
+		assert.Equal(t, "report", pings[0].Event)
+		assert.Equal(t, "1.2.3", pings[0].Version)
+		assert.Equal(t, "", pings[0].Previous)
+		assert.Equal(t, "linux", pings[0].OS)
+		assert.Equal(t, "amd64", pings[0].Arch)
+	})
+
+	t.Run("server error is an error", func(t *testing.T) {
+		mockAPI := testutil.CreateDefaultMockAPI()
+		mockAPI.SetPingStatus(http.StatusInternalServerError)
+		server := httptest.NewServer(mockAPI)
+		defer server.Close()
+
+		client := NewClientWithURL(server.URL)
+		err := client.SendCLIPing(ping)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "500")
+	})
+
+	t.Run("sends JSON with the documented field names", func(t *testing.T) {
+		var got map[string]interface{}
+		var contentType string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			contentType = r.Header.Get("Content-Type")
+			_ = json.NewDecoder(r.Body).Decode(&got)
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		defer server.Close()
+
+		require.NoError(t, NewClientWithURL(server.URL).SendCLIPing(ping))
+		assert.Equal(t, "application/json", contentType)
+		for _, key := range []string{"id", "kind", "event", "version", "previous", "os", "arch"} {
+			assert.Contains(t, got, key)
+		}
+	})
 }
