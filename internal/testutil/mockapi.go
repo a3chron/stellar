@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // MockTheme represents a theme in the mock API
@@ -54,6 +55,7 @@ type MockAPIHandler struct {
 	RequestCounts  map[string]int        // Track requests received, keyed by r.URL.Path
 	pings          []MockPing            // Install reports received, in order
 	pingStatus     int                   // Status to answer pings with; 0 means 204
+	reportDelay    time.Duration         // Hold "report" pings this long before recording them
 }
 
 // NewMockAPIHandler creates a new mock API handler
@@ -333,6 +335,15 @@ func (h *MockAPIHandler) handleCLIPing(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.mu.Lock()
+	delay := h.reportDelay
+	h.mu.Unlock()
+	// The delay sits BEFORE the append, so the recorded order is the order the
+	// hub would have processed the events in, not the order they were sent.
+	if delay > 0 && ping.Event == "report" {
+		time.Sleep(delay)
+	}
+
+	h.mu.Lock()
 	h.pings = append(h.pings, ping)
 	status := h.pingStatus
 	h.mu.Unlock()
@@ -342,6 +353,16 @@ func (h *MockAPIHandler) handleCLIPing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// SetReportDelay makes the mock hold every "report" ping for d before it is
+// recorded and answered, while "uninstall" pings stay instant. It reproduces
+// the report-after-uninstall ordering the real hub would see when the
+// background report is slower than the synchronous uninstall ping.
+func (h *MockAPIHandler) SetReportDelay(d time.Duration) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.reportDelay = d
 }
 
 // Pings returns a copy of every install report received so far, in order.

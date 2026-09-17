@@ -110,11 +110,25 @@ func finishTelemetry() {
 	_ = cfg.Save()
 }
 
-// cancelTelemetry drops any in-flight report without recording it. Uninstall
-// calls it: recording would re-create config.json in a directory the user
-// just asked to have removed.
-func cancelTelemetry() {
+// discardTelemetry waits for any in-flight report to finish and throws the
+// outcome away. Uninstall calls it before its own ping, for two reasons.
+// Recording the outcome would re-create config.json in a directory the user
+// just asked to have removed. And the report must not still be on the wire
+// when the uninstall is sent: the hub clears an install's tombstone whenever a
+// report arrives, so a report that landed AFTER the uninstall would leave this
+// machine counted as active forever. Waiting is bounded the same way
+// finishTelemetry is; a report that times out here is simply lost, which the
+// hub tolerates (an unknown id's uninstall inserts its own tombstone).
+func discardTelemetry() {
+	ch := pendingPing
 	pendingPing = nil
+	if ch == nil {
+		return
+	}
+	select {
+	case <-ch:
+	case <-time.After(joinTimeout):
+	}
 }
 
 // reportUninstall tells the hub this install is gone. Synchronous, because it

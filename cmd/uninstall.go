@@ -92,9 +92,10 @@ remove only the binary.`,
 		}
 
 		// The hub is told first, while config.json (and the install id in it)
-		// still exists. Whatever the PreRun report was doing is dropped: it
-		// would otherwise re-create config.json after the directory is gone.
-		cancelTelemetry()
+		// still exists. The PreRun report is let finish and then dropped: it
+		// must land before the uninstall (see discardTelemetry), and recording
+		// it would re-create config.json after the directory is gone.
+		discardTelemetry()
 		if reportUninstall(cfg) {
 			fmt.Println("Told the hub this install is gone.")
 		}

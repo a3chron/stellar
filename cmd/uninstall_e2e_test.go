@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/a3chron/stellar/internal/telemetry"
 	"github.com/a3chron/stellar/internal/testutil"
@@ -163,6 +164,37 @@ func TestE2E_Uninstall(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, env.IsSymlink(env.StarshipPath))
 		assert.Equal(t, elsewhere, env.ReadSymlink(env.StarshipPath))
+	})
+
+	t.Run("Pending report lands before the uninstall", func(t *testing.T) {
+		// A report is due on this run (nothing reported yet) AND the user
+		// uninstalls. The hub clears an install's tombstone whenever a report
+		// arrives, so if the slower background report reached it after the
+		// uninstall the machine would stay active forever. The mock holds
+		// reports back to force exactly that ordering unless the CLI waits.
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		pinVersion(t, "1.4.0")
+		env.EnableTelemetry()
+		mockAPI := testutil.CreateDefaultMockAPI()
+		mockAPI.SetReportDelay(300 * time.Millisecond)
+		env.SetupMockAPI(mockAPI)
+		fakeBinary(t, env)
+		env.CreateConfig(`{"install_id": "11111111-2222-4333-8444-555555555555", "install_kind": "existing"}`)
+
+		out, err := runUninstall(t, nil, "--yes")
+		require.NoError(t, err)
+		assert.Contains(t, out, "Told the hub")
+
+		pings := mockAPI.Pings()
+		require.Len(t, pings, 2)
+		assert.Equal(t, telemetry.EventReport, pings[0].Event, "the report must be processed first")
+		assert.Equal(t, telemetry.EventUninstall, pings[1].Event)
+		for _, p := range pings {
+			assert.Equal(t, "11111111-2222-4333-8444-555555555555", p.ID)
+			assert.Equal(t, "1.4.0", p.Version)
+		}
+		assert.False(t, env.FileExists(env.StellarDir), "stellar home must be gone, and not re-created by telemetry")
 	})
 
 	t.Run("Dev build does not tell the hub", func(t *testing.T) {
