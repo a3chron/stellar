@@ -1352,6 +1352,120 @@ func TestE2E_Info(t *testing.T) {
 		err := cmd.Execute()
 		assert.Error(t, err)
 	})
+
+	// A3C-158: `stellar info` should mark which of the hub's versions are
+	// already present in the local cache, and which one (if any) is the
+	// currently applied version.
+
+	t.Run("No local cache marks nothing installed", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"info", "testuser/sample-theme"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+
+		assert.NotContains(t, output, "installed",
+			"no version should be marked installed with an empty cache:\n%s", output)
+	})
+
+	t.Run("Marks cached versions as installed", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+
+		// testuser/sample-theme has versions 1.2, 1.1, 1.0 on the hub (see
+		// testutil.CreateDefaultMockAPI). Cache only 1.1 and 1.0 locally.
+		env.CreateThemeFile("testuser", "sample-theme", "1.1", testutil.SampleTOML())
+		env.CreateThemeFile("testuser", "sample-theme", "1.0", testutil.SampleTOML())
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"info", "testuser/sample-theme"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+
+		lines := strings.Split(output, "\n")
+		var line12, line11, line10 string
+		for _, l := range lines {
+			switch {
+			case strings.Contains(l, "1.2"):
+				line12 = l
+			case strings.Contains(l, "1.1"):
+				line11 = l
+			case strings.Contains(l, "1.0"):
+				line10 = l
+			}
+		}
+
+		assert.NotContains(t, line12, "installed", "1.2 is not cached locally:\n%s", output)
+		assert.Contains(t, line11, "installed", "1.1 is cached locally:\n%s", output)
+		assert.Contains(t, line10, "installed", "1.0 is cached locally:\n%s", output)
+		assert.NotContains(t, line11, "current", "1.1 is cached but not applied:\n%s", output)
+		assert.NotContains(t, line10, "current", "1.0 is cached but not applied:\n%s", output)
+	})
+
+	t.Run("Marks the currently applied version", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+
+		themePath := env.CreateThemeFile("testuser", "sample-theme", "1.1", testutil.SampleTOML())
+		config := `{
+  "current_theme": "testuser/sample-theme@1.1",
+  "current_path": "` + themePath + `"
+}`
+		env.CreateConfig(config)
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"info", "testuser/sample-theme"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+
+		var line11 string
+		for _, l := range strings.Split(output, "\n") {
+			if strings.Contains(l, "1.1") {
+				line11 = l
+				break
+			}
+		}
+		assert.Contains(t, line11, "current", "applied version should be marked current:\n%s", output)
+	})
+
+	t.Run("Cached version the hub no longer lists is handled gracefully", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+
+		// 0.9 is cached locally but not among the hub's versions for
+		// testuser/sample-theme (1.2, 1.1, 1.0). The command must not error
+		// or crash over the mismatch.
+		env.CreateThemeFile("testuser", "sample-theme", "0.9", testutil.SampleTOML())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"info", "testuser/sample-theme"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.NoError(t, err)
+	})
 }
 
 // =============================================================================
@@ -1556,6 +1670,184 @@ func TestE2E_Update(t *testing.T) {
 }
 
 // =============================================================================
+// Version Tests
+// =============================================================================
+
+// TestE2E_Version covers A3C-213 ("offline version ux ui"):
+//   - `stellar version` and `stellar --version` must show the current
+//     version block even when the GitHub update check fails or is
+//     unreachable, rather than blocking on it or omitting it.
+//   - a failed update check renders a short warning, never the raw network
+//     error.
+//   - dev builds, and every non-version command, must never call the
+//     update-check endpoint at all (the eager-evaluation bug this ticket
+//     fixes made every single command pay that network round trip).
+func TestE2E_Version(t *testing.T) {
+	releaseJSON := func(tag string) string {
+		return fmt.Sprintf(
+			`{"tag_name":%q,"name":%q,"published_at":"2024-01-01T00:00:00Z","html_url":"https://example.com/%s"}`,
+			tag, tag, tag,
+		)
+	}
+
+	// closedServerURL returns a URL that refuses connections immediately - a
+	// fast, deterministic stand-in for "offline" that doesn't depend on
+	// updateCheckTimeout actually expiring.
+	closedServerURL := func(t *testing.T) string {
+		t.Helper()
+		server := httptest.NewServer(http.NewServeMux())
+		url := server.URL
+		server.Close()
+		return url
+	}
+
+	// pointAt redirects LatestReleaseAPIURL (the var version.go exposes
+	// specifically so tests can do this - see its doc comment) and restores
+	// the real GitHub URL afterward.
+	pointAt := func(t *testing.T, url string) {
+		t.Helper()
+		orig := LatestReleaseAPIURL
+		LatestReleaseAPIURL = url
+		t.Cleanup(func() {
+			LatestReleaseAPIURL = orig
+		})
+	}
+
+	// execOnRoot runs args against the package's singleton rootCmd, not a
+	// fresh NewRootCmd() instance. The version-flag wiring SetVersionInfo
+	// installs (rootCmd.Version, rootCmd.SetVersionTemplate) and the
+	// "version" subcommand version.go's own init() registers both live on
+	// that specific *cobra.Command - main.go's real Execute() path runs
+	// through the very same singleton, so this is the faithful way to
+	// exercise --version/`version`, not a shortcut. The pflag boolean behind
+	// --version has no automatic per-run reset, so it's forced back to false
+	// afterward to keep it from leaking true into a later subtest that
+	// doesn't pass --version itself.
+	execOnRoot := func(t *testing.T, args []string) (string, error) {
+		t.Helper()
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			rootCmd.SetArgs(args)
+			rootCmd.SetOut(new(bytes.Buffer))
+			execErr = rootCmd.Execute()
+		})
+		if f := rootCmd.Flags().Lookup("version"); f != nil {
+			_ = f.Value.Set("false")
+		}
+		return output, execErr
+	}
+
+	t.Run("Offline: shows the version block and a short warning, not the raw error", func(t *testing.T) {
+		_ = testutil.SetupTestEnv(t)
+		pinVersion(t, "1.0.0")
+		pointAt(t, closedServerURL(t))
+
+		output, execErr := execOnRoot(t, []string{"version"})
+		require.NoError(t, execErr)
+
+		assert.Contains(t, output, "version: 1.0.0", "version block must be shown even when offline")
+		assert.Contains(t, output, "Checking for updates...")
+		assert.Contains(t, output, "couldn't fetch latest version, are you online?")
+		assert.NotContains(t, output, "connection refused", "raw network error must not reach the user")
+		assert.NotContains(t, output, "Failed to check for updates:", "raw error wrapper must not reach the user")
+	})
+
+	t.Run("--version behaves the same as the version subcommand", func(t *testing.T) {
+		_ = testutil.SetupTestEnv(t)
+		pinVersion(t, "1.0.0")
+		pointAt(t, closedServerURL(t))
+
+		output, execErr := execOnRoot(t, []string{"--version"})
+		require.NoError(t, execErr)
+
+		assert.Contains(t, output, "version: 1.0.0")
+		assert.Contains(t, output, "Checking for updates...")
+		assert.Contains(t, output, "couldn't fetch latest version, are you online?")
+	})
+
+	t.Run("Online and up to date shows the green success line", func(t *testing.T) {
+		_ = testutil.SetupTestEnv(t)
+		pinVersion(t, "1.2.3")
+
+		mux := http.NewServeMux()
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(releaseJSON("v1.2.3")))
+		})
+		server := httptest.NewServer(mux)
+		t.Cleanup(server.Close)
+		pointAt(t, server.URL)
+
+		output, execErr := execOnRoot(t, []string{"version"})
+		require.NoError(t, execErr)
+		assert.Contains(t, output, "You have the latest version (v1.2.3)")
+	})
+
+	t.Run("Dev build skips the update check entirely and never touches the network", func(t *testing.T) {
+		_ = testutil.SetupTestEnv(t)
+
+		calls := 0
+		mux := http.NewServeMux()
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			_, _ = w.Write([]byte(releaseJSON("v9.9.9")))
+		})
+		server := httptest.NewServer(mux)
+		t.Cleanup(server.Close)
+		pointAt(t, server.URL)
+
+		origVersion, origCommit, origDate := versionInfo.version, versionInfo.commit, versionInfo.date
+		SetVersionInfo("dev", "none", "unknown")
+		t.Cleanup(func() {
+			SetVersionInfo(origVersion, origCommit, origDate)
+		})
+
+		output, execErr := execOnRoot(t, []string{"version"})
+		require.NoError(t, execErr)
+
+		assert.Contains(t, output, "version: dev")
+		assert.NotContains(t, output, "Checking for updates...")
+		assert.Equal(t, 0, calls, "dev builds must never call the update-check endpoint")
+	})
+
+	t.Run("Non-version commands never call the update-check endpoint", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		pinVersion(t, "1.0.0")
+
+		// This is the regression this ticket's item (a) fixes: SetVersionInfo
+		// (called from main on every invocation) used to eagerly evaluate
+		// getFullVersionOutput(), which called this same GitHub endpoint on
+		// every single command, offline timeout and all. Asserting calls == 0
+		// after running ordinary commands would have caught that.
+		calls := 0
+		mux := http.NewServeMux()
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			_, _ = w.Write([]byte(releaseJSON("v9.9.9")))
+		})
+		server := httptest.NewServer(mux)
+		t.Cleanup(server.Close)
+		pointAt(t, server.URL)
+
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+
+		for _, args := range [][]string{
+			{"list"},
+			{"current"},
+			{"info", "testuser/sample-theme"},
+		} {
+			cmd := NewRootCmd()
+			cmd.SetArgs(args)
+			cmd.SetOut(new(bytes.Buffer))
+			require.NoError(t, cmd.Execute(), "args: %v", args)
+		}
+
+		assert.Equal(t, 0, calls, "non-version commands must never hit the GitHub update-check endpoint")
+	})
+}
+
+// =============================================================================
 // Helper functions
 // =============================================================================
 
@@ -1610,4 +1902,83 @@ func backupBinaryForUpdateTest(t *testing.T) {
 // init ensures flags are reset at test start
 func init() {
 	resetFlags()
+}
+
+// The security warning for [custom] commands is the only thing standing
+// between a user and shell code that runs on every prompt render, so the link
+// it offers has to point at the exact version being installed - and has to be
+// openable.
+func TestE2E_ApplySecurityWarningReviewLink(t *testing.T) {
+	t.Run("Links to the reviewed version on the configured hub", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+
+		// Declining at the prompt keeps the assertion about the warning itself
+		// rather than about applying, and proves the abort path still works.
+		restoreStdin := replaceStdin(t, "n\n")
+		defer restoreStdin()
+
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"apply", "testuser/custom-theme"})
+			cmd.SetOut(new(bytes.Buffer))
+			_ = cmd.Execute()
+		})
+
+		assert.Contains(t, output, "SECURITY WARNING")
+
+		// Built from the same base the API client used, so it follows
+		// STELLAR_API_URL here instead of pointing at production.
+		expectedURL := env.MockServer.URL + "/testuser/custom-theme?review=1.0"
+		assert.Contains(t, output, expectedURL,
+			"the review link must name the exact version being applied")
+
+		// Declined, so nothing should have been written or linked.
+		assert.False(t, env.FileExists(
+			filepath.Join(env.StellarDir, "testuser", "custom-theme", "1.0.toml")),
+			"a declined theme must not be cached")
+	})
+
+	t.Run("Does not warn for a theme without custom commands", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"apply", "testuser/sample-theme@1.2"})
+			cmd.SetOut(new(bytes.Buffer))
+			_ = cmd.Execute()
+		})
+
+		assert.NotContains(t, output, "SECURITY WARNING")
+		assert.NotContains(t, output, "?review=")
+	})
+}
+
+// replaceStdin swaps os.Stdin for a pipe preloaded with input, so a test can
+// answer promptConfirmation. The returned func restores the original.
+func replaceStdin(t *testing.T, input string) func() {
+	t.Helper()
+
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+
+	_, err = w.WriteString(input)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	orig := os.Stdin
+	os.Stdin = r
+
+	return func() {
+		os.Stdin = orig
+		_ = r.Close()
+	}
 }
