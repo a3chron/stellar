@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	"github.com/a3chron/stellar/internal/api"
+	"github.com/a3chron/stellar/internal/cache"
+	"github.com/a3chron/stellar/internal/config"
 	"github.com/a3chron/stellar/internal/theme"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -30,6 +32,25 @@ var infoCmd = &cobra.Command{
 			return fmt.Errorf("failed to fetch theme info: %w", err)
 		}
 
+		// Load config to know which version (if any) is currently applied.
+		cfg, err := config.Load()
+		if err != nil {
+			cfg = &config.Config{} // Empty config if doesn't exist
+		}
+
+		// Locally cached versions of this theme, newest first. Gracefully
+		// treats a missing cache directory / zero cached versions as "none
+		// cached" rather than failing the command (cache.ListThemeVersions
+		// already returns (nil, nil) for a missing directory).
+		cachedVersions, err := cache.ListThemeVersions(t.Author, t.Name)
+		if err != nil {
+			cachedVersions = nil
+		}
+		cachedSet := make(map[string]bool, len(cachedVersions))
+		for _, cv := range cachedVersions {
+			cachedSet[cv] = true
+		}
+
 		// Display theme information
 		color.Cyan("═══════════════════════════════════════")
 		color.Green("  %s", info.Name)
@@ -48,7 +69,17 @@ var infoCmd = &cobra.Command{
 		// Versions
 		color.Yellow("Versions (%d):", len(info.Versions))
 		for _, v := range info.Versions {
-			fmt.Printf("  • %s", v.Version)
+			isCurrent := cachedSet[v.Version] &&
+				cfg.CurrentTheme == fmt.Sprintf("%s/%s@%s", t.Author, t.Name, v.Version)
+
+			switch {
+			case isCurrent:
+				fmt.Print(color.GreenString("  ✳ %s (installed, current)", v.Version))
+			case cachedSet[v.Version]:
+				fmt.Print(color.GreenString("  ✓ %s (installed)", v.Version))
+			default:
+				fmt.Printf("  • %s", v.Version)
+			}
 			if v.VersionNotes != "" {
 				fmt.Printf(" - %s", v.VersionNotes)
 			}
