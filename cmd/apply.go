@@ -10,7 +10,9 @@ import (
 	"github.com/a3chron/stellar/internal/api"
 	"github.com/a3chron/stellar/internal/cache"
 	"github.com/a3chron/stellar/internal/config"
+	"github.com/a3chron/stellar/internal/paths"
 	"github.com/a3chron/stellar/internal/symlink"
+	"github.com/a3chron/stellar/internal/term"
 	"github.com/a3chron/stellar/internal/theme"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -141,7 +143,24 @@ var applyCmd = &cobra.Command{
 				color.Yellow("Custom commands run on your system every time Starship renders your prompt.")
 				fmt.Println()
 				color.Cyan("Before proceeding, you should review the config at:")
-				fmt.Printf("  https://stellar-hub.vercel.app/%s/%s\n", t.Author, t.Name)
+				// Built from the same base the API client uses (paths.APIURL
+				// returns the site root - the "/api" segment is appended per
+				// request), so the link cannot drift away from the deployment
+				// the theme was actually fetched from, and follows
+				// STELLAR_API_URL in tests.
+				//
+				// ?review= opens the hub straight into the config viewer for
+				// this exact version with the [custom] sections highlighted,
+				// rather than dropping the user on the theme page to find them.
+				reviewURL := fmt.Sprintf(
+					"%s/%s/%s?review=%s",
+					paths.APIURL(api.BaseURL), t.Author, t.Name, t.Version,
+				)
+				fmt.Printf(
+					"  %s%s\n",
+					term.Hyperlink(reviewURL, reviewURL),
+					color.HiBlackString(term.ClickHint()),
+				)
 				fmt.Println()
 
 				if !promptConfirmation("Do you trust this theme and want to apply it?") {
