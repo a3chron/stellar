@@ -31,7 +31,7 @@ irm https://raw.githubusercontent.com/a3chron/stellar/main/install.ps1 | iex
 ```
 
 Check that stellar is installed with `stellar --version` or `stellar --help`, 
-and search for a theme you like on the [stellar hub](https://stellar-hub.vercel.app) to apply.
+and search for a theme you like on the [stellar hub](https://stellar.a3chron.dev) to apply.
 
 For just switching between your own local configs, check out the [local configs](#local-configs) section.
 
@@ -53,10 +53,30 @@ Some [basic usage](#basic-usage) covered here, for more info, run `stellar --hel
 ### Shell completion
 
 stellar ships tab completion for commands, flags, and theme identifiers
-(`author/slug@version`). Candidates come from your local theme cache, so
-completion is always instant and works offline. If you want hub themes
-suggested too, set `STELLAR_COMPLETION_ONLINE=1` (adds up to ~2s of network
-lookup per completion; degrades silently to local-only when offline).
+(`author/slug@version`). Candidates come from your local theme cache first, so
+completing a theme you already have is instant and works offline.
+
+If nothing in your cache matches what you typed, stellar falls back to the
+stellar-hub and suggests themes from there, so you can tab-complete a theme
+you've never downloaded. The fallback is bounded at 800ms and degrades
+silently: offline, or on a slow hub, you simply get the local candidates (and
+never an error or a hung terminal). Hub candidates are marked `hub`, cached
+ones `local`.
+
+Tune it with `STELLAR_COMPLETION_ONLINE`:
+
+| value | behaviour |
+| --- | --- |
+| unset (default) | local cache, falling back to the hub only when the cache has no match |
+| `1` / `true` / `yes` / `on` | also merge in hub themes when the cache *did* match (costs a hub round trip on every completion, up to 2s) |
+| any other value | local cache only, never any network |
+
+Anything set to an unrecognised *value* (`0`, `false`, `off`, `no`, a typo)
+means local only - set it to turn the network off and it turns off. Setting it
+to an empty string counts as leaving it unset, and keeps the default.
+
+`stellar remove` always completes from the local cache only - it can only
+remove themes you actually have.
 
 ```bash
 # bash
@@ -122,7 +142,7 @@ in your shell config. Deleting `install_id` from `config.json` resets the id.
 **Before:** Getting good starship configs so far was mostly random, from someones github dotfiles, searching for something entirely else...  
 
 
-**With stellar:** Find the right theme on the [stellar hub](https://stellar-hub.vercel.app) & `stellar apply <author>/<theme>`.
+**With stellar:** Find the right theme on the [stellar hub](https://stellar.a3chron.dev) & `stellar apply <author>/<theme>`.
 
 ### Usecases
 
@@ -177,11 +197,11 @@ stellar uninstall
 
 ### Stellar Hub
 
-You can see all available community themes at the [stellar hub](https://stellar-hub.vercel.app).
+You can see all available community themes at the [stellar hub](https://stellar.a3chron.dev).
 
 #### Publishing Your Themes
 
-I am working on getting a `stellar publish` command, but currently you will have to publish your theme at [the upload form](https://stellar-hub.vercel.app/upload).
+I am working on getting a `stellar publish` command, but currently you will have to publish your theme at [the upload form](https://stellar.a3chron.dev/upload).
 
 If you want to update a theme, you can do so in your stellar hub settings, either "Edit Metadata" (The pencil icon), or "Update" (The upload icon), 
 with beeing able to update either metadata like the theme name, description, prerequesites etc., or upload a new config version with version notes.
@@ -264,10 +284,29 @@ This error means the theme doesn't exist anywhere:
 ## Contributing
 
 All contributions are welcome :)  
-The easiest way to contribute is to [upload your own starship config](https://stellar-hub.vercel.app/upload) for other to use ;)
+The easiest way to contribute is to [upload your own starship config](https://stellar.a3chron.dev/upload) for other to use ;)
 
 Please use [conventional commits](https://www.conventionalcommits.org/) for PRs,
 and check for lint errors with `golangci-lint run` (included in the flake).
+
+### Cutting a release
+
+```bash
+nix develop --command ./scripts/release.sh 1.5.0
+```
+
+The script tags the release, pushes the tag (which is what triggers goreleaser),
+then updates `nix/package.nix` to match and pushes that.
+
+Those last three values - `version`, the source `hash` and the stamped commit -
+have to move together, and cannot be collapsed into a single edit: the hash is a
+content hash of the *tagged* tarball, so it does not exist until the tag is
+pushed. That fixed ordering is the whole reason the script exists. It refuses to
+run on a dirty tree, off `main`, out of sync with origin, or when the tag
+already exists, and `--dry-run` shows what it would do.
+
+`flake.nix` has nothing to bump - it derives its version from the commit,
+because it builds the working tree rather than a release.
 
 ### vhs
 
@@ -337,7 +376,11 @@ When adding new CLI features, please add corresponding E2E tests in `cmd/e2e_tes
   - Upload new version of already published theme
   - Interactive prompts for version notes, dependencies, etc.
 - [ ] Add progress bars for downloads
-- [ ] Get stellar into nix pckgs / nixify
+- [ ] **Get stellar into nixpkgs**: the flake is nixified - `nix build` and `nix run` produce a
+  real binary with version/commit ldflags and installed bash/zsh/fish completions, and
+  `nix/package.nix` is a release build pinned to a tag, ready to be copied into nixpkgs as
+  `pkgs/by-name/st/stellar/package.nix`. Remaining for the PR: add a maintainer entry to
+  `maintainers/maintainer-list.nix` and fill in `meta.maintainers`.
 
 <br />
 
