@@ -70,21 +70,16 @@ var applyCmd = &cobra.Command{
 		isLocalOnly := false
 
 		// 3. Resolve the version unless a concrete one was given.
-		//
-		// An explicit "@latest" counts as not concrete: it is a request to
-		// resolve, not a version that exists. Leaving it unresolved meant the
-		// applied identifier was stored as "author/name" (Theme.String() drops
-		// the version when it is "latest"), while the cache and "stellar info"
-		// speak in concrete versions - so neither the "installed" nor the
-		// "current" marker ever matched, and the review link pointed at a
-		// ?review=latest that names no row.
-		if !t.VersionExplicit || t.Version == "latest" {
+		if t.NeedsVersionResolution() {
 			themeDir, _ := t.CacheDir()
 			localVer, localErr := theme.FindLatestLocalVersion(themeDir)
 			hasLocalCache := localErr == nil
 
-			// If we have a local cache and --update is not set, use local version
-			if hasLocalCache && !updateTheme {
+			// A cache written by an older build can itself contain a literal
+			// "latest.toml" - exactly the users this resolution exists for - so
+			// that is not an answer either. Fall through to the hub for a
+			// concrete version.
+			if hasLocalCache && !updateTheme && localVer != theme.LatestVersion {
 				t.Version = localVer
 			} else {
 				// Check online for latest version (first download or --update)

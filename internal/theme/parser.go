@@ -24,6 +24,23 @@ type Theme struct {
 // internal/cache skips it at clean time so a backup is never swept away.
 const BackupThemeName = "backup"
 
+// LatestVersion is the keyword meaning "whatever the newest version is". It is
+// a request to resolve, not a version that exists: nothing is ever stored under
+// it, and Theme.String() omits it entirely.
+const LatestVersion = "latest"
+
+// NeedsVersionResolution reports whether the identifier still has to be turned
+// into a concrete version.
+//
+// True when no version was given, and also when "@latest" was given explicitly
+// - that is a request, not an answer. Leaving it unresolved means the applied
+// identifier is recorded without a version (String() drops "latest"), while the
+// cache and every command that compares against it speak in concrete versions,
+// so nothing ever matches.
+func (t *Theme) NeedsVersionResolution() bool {
+	return !t.VersionExplicit || t.Version == LatestVersion
+}
+
 // IsValidIdentifierRune reports whether r is allowed inside an author or name
 // segment of a theme identifier. It is the single definition of that character
 // class ([a-zA-Z0-9_-]); ParseIdentifier's regex below and any caller that

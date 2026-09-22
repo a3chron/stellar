@@ -42,7 +42,25 @@ Use --force to remove the currently active theme.`,
 				continue
 			}
 
-			if !t.VersionExplicit {
+			// "@latest" is the newest cached version, not a version named
+			// "latest" - nothing is ever stored under that name. Resolving it
+			// here keeps remove agreeing with apply: without this, "remove
+			// x/y@latest" looks for a latest.toml that apply no longer writes
+			// and reports "theme not found in cache" while the theme is sitting
+			// there, applied.
+			//
+			// No version at all still means every version, as documented.
+			if t.VersionExplicit && t.Version == theme.LatestVersion {
+				themeDir, dirErr := t.CacheDir()
+				if dirErr != nil {
+					err = dirErr
+				} else if localVer, verErr := theme.FindLatestLocalVersion(themeDir); verErr != nil {
+					err = fmt.Errorf("theme not found in cache: %s/%s", t.Author, t.Name)
+				} else {
+					t.Version = localVer
+					err = removeSpecificVersion(t, cfg)
+				}
+			} else if !t.VersionExplicit {
 				err = removeAllVersions(t, cfg)
 			} else {
 				err = removeSpecificVersion(t, cfg)

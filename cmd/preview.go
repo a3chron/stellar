@@ -30,13 +30,14 @@ var previewCmd = &cobra.Command{
 		client := api.NewClient()
 
 		// Resolve version if not explicitly specified
-		if !t.VersionExplicit {
+		if t.NeedsVersionResolution() {
 			themeDir, _ := t.CacheDir()
 			localVer, localErr := theme.FindLatestLocalVersion(themeDir)
 			hasLocalCache := localErr == nil
 
-			// If we have a local cache, use it (preview doesn't need --update)
-			if hasLocalCache {
+			// A literal "latest.toml" from an older build is not a concrete
+			// answer; fall through rather than preview a stale alias.
+			if hasLocalCache && localVer != theme.LatestVersion {
 				t.Version = localVer
 			} else {
 				// Check /tmp cache before hitting the API

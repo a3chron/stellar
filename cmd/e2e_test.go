@@ -2013,3 +2013,69 @@ func TestE2E_ApplyExplicitLatestResolvesToConcreteVersion(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "testuser/sample-theme@1.2", cfg.CurrentTheme)
 }
+
+// The @latest keyword has to mean the same thing in every command that takes
+// an identifier, and a cache written by an older build must not defeat that.
+func TestE2E_ExplicitLatestIsConsistentAcrossCommands(t *testing.T) {
+	t.Run("A legacy latest.toml still resolves to a concrete version", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		// Exactly what an older build left behind for anyone who hit the bug.
+		env.CreateThemeFile("testuser", "sample-theme", "latest", testutil.SampleTOML())
+
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"apply", "testuser/sample-theme@latest"})
+		cmd.SetOut(new(bytes.Buffer))
+		require.NoError(t, cmd.Execute())
+
+		cfg, err := config.Load()
+		require.NoError(t, err)
+		assert.Equal(t, "testuser/sample-theme@1.2", cfg.CurrentTheme,
+			"a stale latest.toml must not be accepted as the resolved version")
+	})
+
+	t.Run("remove @latest removes the newest cached version", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		env.CreateThemeFile("testuser", "sample-theme", "1.0", testutil.SampleTOML())
+		env.CreateThemeFile("testuser", "sample-theme", "1.2", testutil.SampleTOML())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"remove", "testuser/sample-theme@latest"})
+		cmd.SetOut(new(bytes.Buffer))
+		require.NoError(t, cmd.Execute())
+
+		assert.False(t, env.FileExists(
+			filepath.Join(env.StellarDir, "testuser", "sample-theme", "1.2.toml")),
+			"@latest should have removed the newest version")
+		assert.True(t, env.FileExists(
+			filepath.Join(env.StellarDir, "testuser", "sample-theme", "1.0.toml")),
+			"older versions should be left alone")
+	})
+
+	t.Run("remove with no version still removes every version", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		env.CreateThemeFile("testuser", "sample-theme", "1.0", testutil.SampleTOML())
+		env.CreateThemeFile("testuser", "sample-theme", "1.2", testutil.SampleTOML())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"remove", "testuser/sample-theme"})
+		cmd.SetOut(new(bytes.Buffer))
+		require.NoError(t, cmd.Execute())
+
+		assert.False(t, env.FileExists(
+			filepath.Join(env.StellarDir, "testuser", "sample-theme", "1.0.toml")))
+		assert.False(t, env.FileExists(
+			filepath.Join(env.StellarDir, "testuser", "sample-theme", "1.2.toml")))
+	})
+}
