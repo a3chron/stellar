@@ -21,11 +21,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// enableOnlineCompletion opts the test in to hub-backed completion for
-// apply/preview/info - the default is local-only for speed.
+// enableOnlineCompletion opts the test in to always-on hub-backed completion
+// for apply/preview/info - the default only reaches the hub when the local
+// cache came up empty.
 func enableOnlineCompletion(t *testing.T) {
 	t.Helper()
 	t.Setenv(completion.EnvOnline, "1")
+}
+
+// disableOnlineCompletion opts the test out of hub-backed completion
+// entirely, including the default local-miss fallback.
+func disableOnlineCompletion(t *testing.T, value string) {
+	t.Helper()
+	t.Setenv(completion.EnvOnline, value)
 }
 
 // runComplete invokes the hidden "__complete" command with args and returns
@@ -33,6 +41,16 @@ func enableOnlineCompletion(t *testing.T) {
 // trailing ":<directive>" line (see cobra's completions.go - the directive
 // integer is always the last line, following a single colon).
 func runComplete(t *testing.T, args ...string) []string {
+	t.Helper()
+	lines, _ := runCompleteCapturingStderr(t, args...)
+	return lines
+}
+
+// runCompleteCapturingStderr is runComplete plus whatever the command wrote to
+// stderr, for the tests that assert a failed hub lookup stays completely
+// silent (a shell shows completion stderr to the user, and stdout noise
+// corrupts the candidate list outright).
+func runCompleteCapturingStderr(t *testing.T, args ...string) ([]string, string) {
 	t.Helper()
 
 	cmd := NewRootCmd()
@@ -46,9 +64,23 @@ func runComplete(t *testing.T, args ...string) []string {
 
 	trimmed := strings.TrimRight(out.String(), "\n")
 	if trimmed == "" {
-		return nil
+		return nil, errOut.String()
 	}
-	return strings.Split(trimmed, "\n")
+	return strings.Split(trimmed, "\n"), errOut.String()
+}
+
+// assertQuietStderr checks that nothing but cobra's own trailing note
+// ("Completion ended with directive: ...", which it writes on every
+// __complete call) reached stderr. A failed hub lookup must never surface as
+// an error in the user's shell.
+func assertQuietStderr(t *testing.T, stderr string) {
+	t.Helper()
+	for _, line := range strings.Split(strings.TrimRight(stderr, "\n"), "\n") {
+		if line == "" || strings.HasPrefix(line, "Completion ended with directive:") {
+			continue
+		}
+		t.Errorf("unexpected completion stderr output: %q", line)
+	}
 }
 
 // directiveLine returns the last line of a runComplete result (the
@@ -332,19 +364,148 @@ func TestCompletion_HubCanonicalAuthorCasing(t *testing.T) {
 	assert.Empty(t, candidateLines(lines))
 }
 
-func TestCompletion_Default_UnknownAuthor_LocalOnlyNoNetwork(t *testing.T) {
+func TestCompletion_Default_UnknownAuthor_FallsBackToHub(t *testing.T) {
 	env := testutil.SetupTestEnv(t)
 	resetFlags()
 
 	mockAPI := testutil.CreateDefaultMockAPI()
 	env.SetupMockAPI(mockAPI)
 
-	// Without STELLAR_COMPLETION_ONLINE, an unknown author prefix must NOT
-	// fall back to the hub - completion stays instant and offline.
+	env.CreateThemeFile("local", "mytheme", "1.0", testutil.SampleTOML())
+
+	// No STELLAR_COMPLETION_ONLINE set: "other" matches no cached author, so
+	// the default local-then-hub mode falls back to the hub rather than
+	// completing to nothing at all.
 	lines := runComplete(t, "apply", "other")
 
+	assert.Equal(t, []string{"otheruser/\thub"}, candidateLines(lines))
+	assert.GreaterOrEqual(t, mockAPI.Requests("/api/themes"), 1)
+}
+
+func TestCompletion_Default_SlugStage_LocalMiss_FallsBackToHub(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+	resetFlags()
+
+	mockAPI := testutil.CreateDefaultMockAPI()
+	env.SetupMockAPI(mockAPI)
+
+	// Cached: testuser/sample-theme only. The hub also has testuser/custom-theme
+	// and otheruser/ocean-theme.
+	env.CreateThemeFile("testuser", "sample-theme", "1.2", testutil.SampleTOML())
+
+	// An author with nothing cached at all falls back...
+	lines := runComplete(t, "apply", "otheruser/")
+	assert.Equal(t, []string{"otheruser/ocean-theme\thub"}, candidateLines(lines))
+
+	// ...and so does a cached author whose cached slugs don't match the typed
+	// prefix: "isn't in local stuff" is judged per completion, not per author.
+	lines = runComplete(t, "apply", "testuser/cus")
+	assert.Equal(t, []string{"testuser/custom-theme\thub"}, candidateLines(lines))
+
+	assert.GreaterOrEqual(t, mockAPI.Requests("/api/themes"), 2)
+}
+
+func TestCompletion_Default_VersionStage_UncachedTheme_FallsBackToHub(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+	resetFlags()
+
+	mockAPI := testutil.CreateDefaultMockAPI()
+	env.SetupMockAPI(mockAPI)
+
+	// Nothing cached for testuser/sample-theme, so every version comes from
+	// the hub. "latest" is still appended last, undecorated.
+	lines := runComplete(t, "apply", "testuser/sample-theme@")
+
+	assert.Equal(t, []string{
+		"testuser/sample-theme@1.2\thub",
+		"testuser/sample-theme@1.1\thub",
+		"testuser/sample-theme@1.0\thub",
+		"testuser/sample-theme@latest",
+	}, candidateLines(lines))
+	assert.GreaterOrEqual(t, mockAPI.Requests("/api/testuser/sample-theme"), 1)
+}
+
+func TestCompletion_Default_Offline_SilentlyDegradesToLocal(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+	resetFlags()
+
+	// Nothing is listening on this port, so the default fallback lookup
+	// fails. It must cost the user nothing: no error, no stray output, no
+	// wait - just the local candidates (here, none).
+	t.Setenv("STELLAR_API_URL", "http://127.0.0.1:1")
+	env.CreateThemeFile("local", "mytheme", "1.0", testutil.SampleTOML())
+
+	start := time.Now()
+	lines, stderr := runCompleteCapturingStderr(t, "apply", "unknown-author")
+	elapsed := time.Since(start)
+
 	assert.Empty(t, candidateLines(lines))
-	assert.Equal(t, 0, mockAPI.TotalRequests())
+	assert.Equal(t, ":6", directiveLine(lines))
+	assertQuietStderr(t, stderr)
+	assert.Less(t, elapsed, 5*time.Second, "a refused connection must fail fast")
+
+	// The local cache still completes normally while offline.
+	lines = runComplete(t, "apply", "loc")
+	assert.Equal(t, []string{"local/\tlocal"}, candidateLines(lines))
+}
+
+func TestCompletion_Default_HangingHub_BoundedByFallbackTimeout(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+	resetFlags()
+
+	// A hub that accepts the connection and then never answers is the case
+	// the timeout exists for. The default fallback runs under a tighter
+	// budget (800ms) than the opt-in path (2s) precisely because the user
+	// never asked for it - so this must come back well under 2s.
+	released := make(chan struct{})
+	server := httptest.NewServer(
+		http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+			<-released
+		}),
+	)
+	// Cleanups run LIFO, so this releases the blocked handler *before*
+	// server.Close() starts waiting for it.
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(released) })
+	t.Setenv("STELLAR_API_URL", server.URL)
+
+	env.CreateThemeFile("local", "mytheme", "1.0", testutil.SampleTOML())
+
+	start := time.Now()
+	lines, stderr := runCompleteCapturingStderr(t, "apply", "unknown-author")
+	elapsed := time.Since(start)
+
+	assert.Less(t, elapsed, 1500*time.Millisecond,
+		"the default fallback must be bounded by the sub-second budget, not the 2s opt-in one")
+	// Guard against a vacuous pass: if the lookup never happened, this would
+	// have returned instantly.
+	assert.Greater(t, elapsed, 500*time.Millisecond, "the hub should actually have been queried")
+	assert.Empty(t, candidateLines(lines))
+	assertQuietStderr(t, stderr)
+	assert.Equal(t, ":6", directiveLine(lines))
+}
+
+func TestCompletion_ExplicitOptOut_NeverQueriesHub(t *testing.T) {
+	// Anything set but not recognised as "on" must mean local-only. A value
+	// like "off" or "no" is someone asking for no network; falling through to
+	// the default would do the exact opposite of what they asked, silently.
+	for _, value := range []string{"0", "false", "off", "no", "False", "FALSE", " 0 "} {
+		t.Run(value, func(t *testing.T) {
+			env := testutil.SetupTestEnv(t)
+			resetFlags()
+			disableOnlineCompletion(t, value)
+
+			mockAPI := testutil.CreateDefaultMockAPI()
+			env.SetupMockAPI(mockAPI)
+
+			// Every stage that would otherwise fall back must stay local.
+			for _, arg := range []string{"other", "otheruser/", "testuser/sample-theme@"} {
+				runComplete(t, "apply", arg)
+			}
+
+			assert.Equal(t, 0, mockAPI.TotalRequests())
+		})
+	}
 }
 
 func TestCompletion_Default_SlugStage_LocalOnlyNoNetwork(t *testing.T) {
@@ -356,6 +517,11 @@ func TestCompletion_Default_SlugStage_LocalOnlyNoNetwork(t *testing.T) {
 
 	env.CreateThemeFile("testuser", "sample-theme", "1.2", testutil.SampleTOML())
 
+	// The hub also has testuser/custom-theme, but a local slug matched, so the
+	// default mode spends no round trip. That's the deliberate tradeoff of
+	// fallback-only: the fast path never pays, at the cost of not merging in
+	// hub themes you don't have yet. STELLAR_COMPLETION_ONLINE=1 buys those
+	// (see TestCompletion_AuthorSlash_LocalThenRemoteDeduped).
 	lines := runComplete(t, "apply", "testuser/")
 
 	assert.Equal(t, []string{"testuser/sample-theme\tlocal"}, candidateLines(lines))
@@ -371,6 +537,8 @@ func TestCompletion_Default_VersionStage_LocalPlusLatestNoNetwork(t *testing.T) 
 
 	env.CreateThemeFile("testuser", "sample-theme", "1.0", testutil.SampleTOML())
 
+	// One cached version is enough to keep the default mode offline, even
+	// though the hub has 1.2 and 1.1 too.
 	lines := runComplete(t, "apply", "testuser/sample-theme@")
 
 	assert.Equal(t, []string{

@@ -19,18 +19,26 @@ type Mode int
 
 const (
 	// LocalOnly restricts completion to the local cache (~/.config/stellar).
-	// This is the default for every command: remote lookups (even with a 2s
-	// cap) make TAB feel broken, and `stellar remove` only ever operates on
-	// cached themes anyway.
+	// It's what `stellar remove` uses (it only ever operates on cached
+	// themes), and what EnvOnline=0 turns the other commands into.
 	LocalOnly Mode = iota
-	// LocalAndRemote additionally queries the stellar-hub API when the local
-	// cache alone doesn't have enough to complete usefully. Opt-in via the
-	// EnvOnline environment variable.
+	// LocalAndRemote queries the stellar-hub API on every completion, merging
+	// its results into the local ones. Opt-in via EnvOnline=1: it costs a
+	// round trip even when the cache would have answered instantly.
 	LocalAndRemote
+	// LocalThenRemote queries the stellar-hub API only when the local cache
+	// produced no candidate for what the user typed - "if the author isn't in
+	// local stuff, fall back to online". This is the default for
+	// apply/preview/info: the common case (completing a theme you already
+	// have) never touches the network, and the case that used to complete to
+	// nothing at all now reaches the hub.
+	LocalThenRemote
 )
 
-// EnvOnline opts apply/preview/info completion in to hub suggestions
-// ("1" or "true"). Off by default: completion must never feel slow.
+// EnvOnline tunes apply/preview/info completion: "1"/"true" queries the hub
+// on every completion, "0"/"false" never queries it. Unset (the default) is
+// LocalThenRemote - the hub is consulted only when the local cache came up
+// empty.
 const EnvOnline = "STELLAR_COMPLETION_ONLINE"
 
 const (
@@ -47,8 +55,12 @@ const (
 //   - Stage C ("@" typed): versions for that author/slug, emitted as
 //     "author/slug@version".
 //
-// It never blocks on the network for long: any remote lookup goes through
-// api.NewCompletionClient (2s timeout), and any error from it degrades
+// Each stage consults the hub according to mode: never (LocalOnly), always
+// (LocalAndRemote), or only when that stage's local candidates came up empty
+// (LocalThenRemote, the default - see shouldQueryHub).
+//
+// It never blocks on the network for long: any remote lookup goes through a
+// short-timeout client (see completionClient), and any error from it degrades
 // silently to whatever local results were already gathered - logged only via
 // cobra.CompDebugln, since stray text on stdout would corrupt what the
 // user's shell parses as completion candidates.
@@ -88,9 +100,36 @@ func ThemeIdentifier(toComplete string, mode Mode) ([]string, cobra.ShellCompDir
 	return completeVersion(author, slug, versionPrefix, mode)
 }
 
+// shouldQueryHub decides whether a stage may spend a network round trip,
+// given the mode and how many candidates the local cache already produced for
+// what the user typed. LocalThenRemote - the default - only pays for the hub
+// when the local cache had nothing, so the common path stays instant.
+func shouldQueryHub(mode Mode, localCandidates int) bool {
+	switch mode {
+	case LocalAndRemote:
+		return true
+	case LocalThenRemote:
+		return localCandidates == 0
+	default: // LocalOnly
+		return false
+	}
+}
+
+// completionClient returns the hub client for mode. The default fallback path
+// gets a tighter timeout than the opt-in one: the user never asked for that
+// lookup, so it has to stay imperceptible or disappear.
+func completionClient(mode Mode) *api.Client {
+	if mode == LocalThenRemote {
+		return api.NewFallbackCompletionClient()
+	}
+	return api.NewCompletionClient()
+}
+
 // completeAuthor implements Stage A: local author directories first; if (and
 // only if) toComplete is non-empty and none of them match, fall back to
-// querying the hub for authors by prefix.
+// querying the hub for authors by prefix. This stage has always been
+// fallback-shaped, in either remote mode: a bare prefix with no "/" yet is
+// exactly the case the hub is worst at narrowing down.
 func completeAuthor(toComplete string, mode Mode) ([]string, cobra.ShellCompDirective) {
 	directive := cobra.ShellCompDirectiveNoFileComp | cobra.ShellCompDirectiveNoSpace
 
@@ -113,15 +152,17 @@ func completeAuthor(toComplete string, mode Mode) ([]string, cobra.ShellCompDire
 		}
 	}
 
-	// Empty input never triggers a network call: it's a legitimate case
-	// (user just typed the bare command) and local-only is a good enough
-	// answer. Same if a local author already matched, or the caller is
-	// LocalOnly.
+	// Empty input never triggers a network call, in any mode: it's a
+	// legitimate case (user just typed the bare command), listing every
+	// author on the hub would be useless, and local-only is a good enough
+	// answer. Neither does a matching local author, even in LocalAndRemote:
+	// the hub can only add authors the user has never downloaded from, and a
+	// bare prefix is the stage where that list is longest and least useful.
 	if toComplete == "" || len(candidates) > 0 || mode == LocalOnly {
 		return candidates, directive
 	}
 
-	client := api.NewCompletionClient()
+	client := completionClient(mode)
 	summaries, err := client.SearchThemesByAuthorName(toComplete)
 	if err != nil {
 		cobra.CompDebugln(err.Error(), false)
@@ -156,9 +197,11 @@ func completeAuthor(toComplete string, mode Mode) ([]string, cobra.ShellCompDire
 	return candidates, directive
 }
 
-// completeSlug implements Stage B: local slugs for author first, then (in
-// LocalAndRemote mode) that author's hub themes appended, deduplicated on
-// slug. Every candidate keeps the author exactly as the user typed it: the
+// completeSlug implements Stage B: local slugs for author first, then that
+// author's hub themes appended, deduplicated on slug - always in
+// LocalAndRemote mode, and only when no local slug matched in the default
+// LocalThenRemote mode. Every candidate keeps the author exactly as the user
+// typed it: the
 // hub's /api/{author}/{slug} routes resolve authors with an exact match, so a
 // hub theme is only suggested when the typed casing is the hub's casing -
 // otherwise the completion would either 404 on apply or (see completeAuthor)
@@ -187,11 +230,11 @@ func completeSlug(author, slugPrefix string, mode Mode) ([]string, cobra.ShellCo
 		candidates = append(candidates, withDesc(author+"/"+slug, descLocal))
 	}
 
-	if mode == LocalOnly {
+	if !shouldQueryHub(mode, len(candidates)) {
 		return candidates, directive
 	}
 
-	client := api.NewCompletionClient()
+	client := completionClient(mode)
 	summaries, err := client.SearchThemesByAuthorName(author)
 	if err != nil {
 		cobra.CompDebugln(err.Error(), false)
@@ -219,9 +262,13 @@ func completeSlug(author, slugPrefix string, mode Mode) ([]string, cobra.ShellCo
 	return candidates, directive
 }
 
-// completeVersion implements Stage C: local versions newest-first, then (in
-// LocalAndRemote mode) remote versions from GetThemeInfo not already
-// present, then the "latest" keyword last. Remote is skipped entirely for
+// completeVersion implements Stage C: local versions newest-first, then
+// remote versions from GetThemeInfo not already present (always in
+// LocalAndRemote mode, only when nothing is cached for this theme in the
+// default LocalThenRemote mode), then the "latest" keyword last. The
+// always-appended "latest" doesn't count as a local candidate for that
+// decision: it's a keyword every theme accepts, not evidence the theme is
+// cached. Remote is skipped entirely for
 // the reserved backup theme (theme.BackupThemeName): it's never published on
 // the hub, so looking it up there would only cost a doomed round trip.
 func completeVersion(author, slug, versionPrefix string, mode Mode) ([]string, cobra.ShellCompDirective) {
@@ -273,8 +320,8 @@ func completeVersion(author, slug, versionPrefix string, mode Mode) ([]string, c
 		candidates = append(candidates, withDesc(emit(v), descLocal))
 	}
 
-	if mode == LocalAndRemote && slug != theme.BackupThemeName {
-		client := api.NewCompletionClient()
+	if shouldQueryHub(mode, len(candidates)) && slug != theme.BackupThemeName {
+		client := completionClient(mode)
 		info, err := client.GetThemeInfo(author, slug)
 		if err != nil {
 			cobra.CompDebugln(err.Error(), false)

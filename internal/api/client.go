@@ -12,7 +12,7 @@ import (
 	"github.com/a3chron/stellar/internal/paths"
 )
 
-const BaseURL = "https://stellar-hub.vercel.app"
+const BaseURL = "https://stellar.a3chron.dev"
 
 type Client struct {
 	baseURL    string
@@ -41,13 +41,36 @@ func NewClientWithURL(baseURL string) *Client {
 	return newClient(baseURL, 30*time.Second)
 }
 
-// NewCompletionClient creates a client tuned for shell completion requests.
-// Shell completion runs synchronously on every keystroke in the user's
-// shell, so it must never block waiting on a slow or unreachable
-// stellar-hub: callers are expected to treat any error from this client as
-// "degrade to local-only completions" rather than surfacing it.
+// Timeouts for the two shell-completion clients. Shell completion runs
+// synchronously in the user's shell on every TAB, so it must never block
+// waiting on a slow or unreachable stellar-hub: callers are expected to
+// treat any error from these clients as "degrade to local-only completions"
+// rather than surfacing it.
+const (
+	// completionTimeout bounds a lookup the user explicitly opted in to with
+	// STELLAR_COMPLETION_ONLINE=1. They asked for hub suggestions on every
+	// completion, so it's worth waiting a bit longer to actually get them.
+	completionTimeout = 2 * time.Second
+	// fallbackCompletionTimeout bounds the on-by-default lookup that fires
+	// only when the local cache had nothing to offer. Nobody asked for that
+	// round trip, so it has to be invisible when it fails: a warm hub answers
+	// in a few hundred milliseconds, and anything past ~1s reads as a hung
+	// terminal.
+	fallbackCompletionTimeout = 800 * time.Millisecond
+)
+
+// NewCompletionClient creates a client for opt-in hub completion
+// (STELLAR_COMPLETION_ONLINE=1), which queries the hub on every completion.
 func NewCompletionClient() *Client {
-	return newClient(paths.APIURL(BaseURL), 2*time.Second)
+	return newClient(paths.APIURL(BaseURL), completionTimeout)
+}
+
+// NewFallbackCompletionClient creates a client for the default
+// local-then-hub completion path, which queries the hub only when the local
+// cache produced no candidates. It gets a tighter budget than
+// NewCompletionClient because the user never asked for the round trip.
+func NewFallbackCompletionClient() *Client {
+	return newClient(paths.APIURL(BaseURL), fallbackCompletionTimeout)
 }
 
 // NewTelemetryClient creates a client for the anonymous install report. The

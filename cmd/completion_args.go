@@ -30,17 +30,38 @@ func init() {
 }
 
 // themeCompletionMode returns the candidate sources for apply/preview/info
-// completion. Local-only by default: even a 2s hub round trip makes TAB feel
-// broken, and most users complete themes they already have cached. Setting
-// STELLAR_COMPLETION_ONLINE=1 opts in to hub suggestions.
+// completion.
+//
+// The default is completion.LocalThenRemote: the hub is queried only when the
+// local cache produced nothing for what the user typed. That keeps the common
+// case - completing a theme you already have - entirely offline and instant,
+// while the case that previously completed to nothing at all (a theme you've
+// never downloaded) now reaches the hub, under a sub-second budget and
+// degrading silently to no candidates.
+//
+// STELLAR_COMPLETION_ONLINE overrides it in both directions: "1"/"true"
+// queries the hub on every completion (hub themes are merged in even when the
+// cache already matched), "0"/"false" never touches the network at all.
 //
 // Read per invocation (not in init) because every shell completion request
 // is its own process and tests toggle the variable at runtime.
 func themeCompletionMode() completion.Mode {
-	if os.Getenv(completion.EnvOnline) == "1" || os.Getenv(completion.EnvOnline) == "true" {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(completion.EnvOnline)))
+
+	switch raw {
+	case "":
+		// Unset: the default. Local first, hub only when local finds nothing.
+		return completion.LocalThenRemote
+	case "1", "true", "yes", "on":
 		return completion.LocalAndRemote
+	default:
+		// Set to anything else - "0", "false", "off", "no", or a typo - means
+		// local only. Failing closed matters here: someone who writes
+		// STELLAR_COMPLETION_ONLINE=off is asking for no network, and falling
+		// through to the default would silently do the opposite of what they
+		// asked.
+		return completion.LocalOnly
 	}
-	return completion.LocalOnly
 }
 
 // themeIdentifierArgs is the ValidArgsFunction for commands that accept
