@@ -13,7 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HUB_DIR="$(dirname "$SCRIPT_DIR")/stellar-hub"
 DEV_PID=""
 DEV_URL="${STELLAR_DEV_URL:-http://localhost:3000}"
-PROD_URL="https://stellar-hub.vercel.app"
+PROD_URL="https://stellar.a3chron.dev"
 
 cleanup() {
     if [ -n "$DEV_PID" ]; then
@@ -131,7 +131,7 @@ run_e2e_local() {
 
 run_e2e_prod() {
     echo -e "\n${BLUE}=== E2E Tests (Production) ===${NC}"
-    echo -e "${CYAN}Tests against stellar-hub.vercel.app.${NC}\n"
+    echo -e "${CYAN}Tests against stellar.a3chron.dev.${NC}\n"
     cd "$SCRIPT_DIR"
 
     STELLAR_DEV_URL="$PROD_URL" run_go_tests -tags=integration -v ./internal/api/...
@@ -169,7 +169,7 @@ show_menu() {
     echo ""
     echo "  1) E2E tests (mock)        - Fast, no server needed"
     echo "  2) E2E tests (local)       - Requires local dev server"
-    echo "  3) E2E tests (production)  - Tests against stellar-hub.vercel.app"
+    echo "  3) E2E tests (production)  - Tests against stellar.a3chron.dev"
     echo "  4) Unit tests              - Internal module tests"
     echo "  5) All tests"
     echo "  6) Run golangci-lint"
