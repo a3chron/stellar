@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/a3chron/stellar/internal/config"
 	"github.com/a3chron/stellar/internal/paths"
 	"github.com/a3chron/stellar/internal/symlink"
 	"github.com/a3chron/stellar/internal/testutil"
@@ -1981,4 +1982,34 @@ func replaceStdin(t *testing.T, input string) func() {
 		os.Stdin = orig
 		_ = r.Close()
 	}
+}
+
+// An explicit "@latest" used to stay literal, so the applied identifier was
+// stored without a version and nothing in `stellar info` could match it.
+func TestE2E_ApplyExplicitLatestResolvesToConcreteVersion(t *testing.T) {
+	testutil.RequireSymlinks(t)
+	env := testutil.SetupTestEnv(t)
+	resetFlags()
+
+	mockAPI := testutil.CreateDefaultMockAPI()
+	env.SetupMockAPI(mockAPI)
+
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"apply", "testuser/sample-theme@latest"})
+	cmd.SetOut(new(bytes.Buffer))
+	require.NoError(t, cmd.Execute())
+
+	// Cached under the concrete version, not under "latest".
+	assert.True(t, env.FileExists(
+		filepath.Join(env.StellarDir, "testuser", "sample-theme", "1.2.toml")),
+		"theme should be cached under its resolved version")
+	assert.False(t, env.FileExists(
+		filepath.Join(env.StellarDir, "testuser", "sample-theme", "latest.toml")),
+		"nothing should be cached under the literal name 'latest'")
+
+	// And the applied identifier carries that version, which is what
+	// `stellar info` compares against.
+	cfg, err := config.Load()
+	require.NoError(t, err)
+	assert.Equal(t, "testuser/sample-theme@1.2", cfg.CurrentTheme)
 }

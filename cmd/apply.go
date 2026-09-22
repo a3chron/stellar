@@ -69,8 +69,16 @@ var applyCmd = &cobra.Command{
 		client := api.NewClient()
 		isLocalOnly := false
 
-		// 3. Resolve version if not explicitly specified
-		if !t.VersionExplicit {
+		// 3. Resolve the version unless a concrete one was given.
+		//
+		// An explicit "@latest" counts as not concrete: it is a request to
+		// resolve, not a version that exists. Leaving it unresolved meant the
+		// applied identifier was stored as "author/name" (Theme.String() drops
+		// the version when it is "latest"), while the cache and "stellar info"
+		// speak in concrete versions - so neither the "installed" nor the
+		// "current" marker ever matched, and the review link pointed at a
+		// ?review=latest that names no row.
+		if !t.VersionExplicit || t.Version == "latest" {
 			themeDir, _ := t.CacheDir()
 			localVer, localErr := theme.FindLatestLocalVersion(themeDir)
 			hasLocalCache := localErr == nil
