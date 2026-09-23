@@ -229,13 +229,29 @@ func authorID(author string) string {
 	return "user-" + strings.ToLower(author)
 }
 
-// handleSearchThemes implements GET /api/themes?authorName=<prefix>, used by
-// shell completion (internal/completion) to look up hub authors/themes
-// without downloading a full ThemeInfo per candidate. It filters registered
-// themes by a case-insensitive prefix match on author name, and orders the
-// result by theme name (matching the hub's sort=name, which is what the
-// client requests), tie-broken by author so map iteration order can't leak
-// into a test.
+// matchesSearch reports whether q (already lowercased) is a substring of any
+// of theme's name, slug, description, or author - mirroring the hub's
+// buildThemeSearchCondition, which ILIKEs %q% against those same columns
+// (name/slug/description/author name & username).
+func matchesSearch(t *MockTheme, q string) bool {
+	fields := []string{t.Name, t.Slug, t.Description, t.Author}
+	for _, f := range fields {
+		if strings.Contains(strings.ToLower(f), q) {
+			return true
+		}
+	}
+	return false
+}
+
+// handleSearchThemes implements GET /api/themes?authorName=<prefix> and GET
+// /api/themes?search=<q>, used by shell completion and cmd/suggest.go's
+// "did you mean" lookups to find hub authors/themes without downloading a
+// full ThemeInfo per candidate. authorName is a case-insensitive prefix
+// match on author name; search is a case-insensitive substring match against
+// name/slug/description/author (see matchesSearch). Results are ordered by
+// theme name (matching the hub's sort=name, which is what the client
+// requests), tie-broken by author so map iteration order can't leak into a
+// test.
 func (h *MockAPIHandler) handleSearchThemes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -243,12 +259,16 @@ func (h *MockAPIHandler) handleSearchThemes(w http.ResponseWriter, r *http.Reque
 	}
 
 	authorPrefix := strings.ToLower(r.URL.Query().Get("authorName"))
+	search := strings.ToLower(r.URL.Query().Get("search"))
 
 	// Copy matching themes under the mutex (see ServeHTTP for why).
 	h.mu.Lock()
 	var matches []MockTheme
 	for _, theme := range h.themes {
 		if authorPrefix != "" && !strings.HasPrefix(strings.ToLower(theme.Author), authorPrefix) {
+			continue
+		}
+		if search != "" && !matchesSearch(theme, search) {
 			continue
 		}
 		matches = append(matches, *theme)

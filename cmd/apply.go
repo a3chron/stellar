@@ -209,7 +209,7 @@ var applyCmd = &cobra.Command{
 				color.Yellow("Downloading %s...", t)
 				content, err = client.FetchThemeConfig(t.Author, t.Name, t.Version)
 				if err != nil {
-					return downloadError(client, t, err)
+					return downloadError("apply", client, t, err)
 				}
 			}
 

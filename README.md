@@ -331,13 +331,21 @@ One of these prints when stellar can't get a version from stellar-hub but a loca
 
 This is usually not a problem - stellar will use whatever version you have cached locally. `stellar info` shows the same idea with `(offline - showing cached info only)`, or `(not on stellar-hub - showing local copy)` when the theme simply isn't published (a 404, as opposed to being unreachable).
 
-### "theme not found: author/theme (not available online and no local cache)" / "no theme author/theme on stellar-hub" / "can't reach stellar-hub (are you offline?) and no local cache for author/theme"
+### "no theme author/theme on stellar-hub - is that the right theme name?" / "no author author on stellar-hub" / "theme not found: author/theme (not available online and no local cache)" / "can't reach stellar-hub (are you offline?) and no local cache for author/theme"
 
-One of these errors (non-zero exit) means the theme couldn't be resolved at all - no cache to fall back to either:
+One of these errors (non-zero exit) means the theme couldn't be resolved at all - no cache to fall back to either. This is the same error whether or not you gave an explicit `@version` - a typo'd theme name is reported as a missing theme either way, never as a missing version:
 - Check if you typed the theme name correctly
 - The theme may have been removed from stellar-hub
 - You may be offline, with nothing cached locally for this theme yet
 - For local themes, make sure you created the folder at `~/.config/stellar/<author>/<theme>/` with a `.toml` file
+
+"no author author on stellar-hub" specifically means nobody has published anything under that author handle - most often a typo in the author, not the theme name.
+
+When something close enough exists, either of these errors is followed by a `Did you mean: ...` line (or several, one per line, ranked closest first) suggesting a theme from the same author, a matching slug published under a different author, or something already in your local cache. It's a best-effort suggestion (skipped if nothing is close, or if stellar-hub can't be reached quickly enough) - never assume the suggestion is correct, but it usually is.
+
+### "author/theme has no version X - is that the right version?"
+
+The theme itself exists, but not the version you asked for. The error lists the versions that do exist (oldest first, with the latest called out), and - unless nothing published is remotely close - a `Did you mean: stellar apply/preview/info author/theme@<version>` line suggesting the closest one (same major version, nearest minor, or the latest otherwise). If stellar-hub can't be reached but this theme has other versions cached locally, those are used instead of a generic "offline" error - they're real evidence of what versions actually exist.
 
 ### "aborted: theme was not applied/previewed/restored" / "no answer on stdin; re-run with --force to skip this confirmation"
 

@@ -3,7 +3,6 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/a3chron/stellar/internal/api"
 	"github.com/a3chron/stellar/internal/cache"
@@ -84,7 +83,7 @@ var infoCmd = &cobra.Command{
 				for i, v := range info.Versions {
 					available[i] = v.Version
 				}
-				return fmt.Errorf("version %s not found for %s/%s (available: %s)", t.Version, t.Author, t.Name, strings.Join(available, ", "))
+				return versionNotFoundError("info", t, available)
 			}
 		}
 

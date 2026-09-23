@@ -300,6 +300,37 @@ func (c *Client) SearchThemesByAuthorName(authorName string) ([]ThemeSummary, er
 	return result.Themes, nil
 }
 
+// SearchThemes queries GET /api/themes?search=<q>, which the hub matches
+// (ILIKE) against a theme's name, slug, description, and author name/
+// username - i.e. it can find a theme under an author other than the one
+// asked for. Used by cmd/suggest.go to build "did you mean" suggestions when
+// an author/slug doesn't exist, so a wrong author (right slug) still turns
+// up a candidate.
+func (c *Client) SearchThemes(query string) ([]ThemeSummary, error) {
+	reqURL := fmt.Sprintf("%s/api/themes?search=%s&limit=20", c.baseURL, url.QueryEscape(query))
+
+	resp, err := c.httpClient.Get(reqURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search themes: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server returned %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Themes []ThemeSummary `json:"themes"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	return result.Themes, nil
+}
+
 func (c *Client) IncrementDownloadCount(author, name string) error {
 	url := fmt.Sprintf("%s/api/%s/%s", c.baseURL, author, name)
 

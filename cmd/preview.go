@@ -118,7 +118,7 @@ var previewCmd = &cobra.Command{
 			var content string
 			content, err = client.FetchThemeConfig(t.Author, t.Name, t.Version)
 			if err != nil {
-				return downloadError(client, t, err)
+				return downloadError("preview", client, t, err)
 			}
 			validationResult, err = theme.ValidateConfigContent(content)
 			if err != nil {

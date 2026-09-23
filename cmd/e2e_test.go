@@ -423,7 +423,7 @@ func TestE2E_Apply(t *testing.T) {
 
 		err := cmd.Execute()
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not found")
+		assert.Contains(t, err.Error(), "no author nobody on stellar-hub")
 	})
 
 	t.Run("Apply invalid identifier errors", func(t *testing.T) {
@@ -1545,7 +1545,7 @@ func TestE2E_Preview(t *testing.T) {
 
 		err := cmd.Execute()
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not found")
+		assert.Contains(t, err.Error(), "no author nobody on stellar-hub")
 	})
 }
 
@@ -2597,13 +2597,273 @@ func TestE2E_ErrorClarity(t *testing.T) {
 
 		err := cmd.Execute()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "not found")
+		assert.Contains(t, err.Error(), "no author nobody on stellar-hub")
 	})
 
 	t.Run("Invalid identifier explains the format", func(t *testing.T) {
 		_, err := theme.ParseIdentifier("author/theme@1.2.3")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "X.Y")
+	})
+}
+
+// =============================================================================
+// "Did you mean" Suggestion Tests
+// =============================================================================
+
+// newCtpBlueMockAPI returns a mock hub with a single theme, a3chron/ctp-blue,
+// published with versions 1.0 and 1.1 (deliberately not 1.2, so requesting
+// "@1.2" exercises the version-not-found suggestion). Used by every test
+// below that needs a theme that's real but has a typo'd slug, author, or
+// version thrown at it.
+func newCtpBlueMockAPI() *testutil.MockAPIHandler {
+	handler := testutil.NewMockAPIHandler()
+	handler.AddTheme(testutil.MockTheme{
+		ID:          "ctp-blue-id",
+		Author:      "a3chron",
+		Slug:        "ctp-blue",
+		Name:        "Catppuccin Blue",
+		Description: "A blue catppuccin theme",
+		CreatedAt:   "2024-01-01T00:00:00Z",
+		UpdatedAt:   "2024-01-10T00:00:00Z",
+		Versions: []testutil.MockVersion{
+			{Version: "1.1", ConfigContent: testutil.SampleTOML(), CreatedAt: "2024-01-10T00:00:00Z"},
+			{Version: "1.0", ConfigContent: testutil.SampleTOML(), CreatedAt: "2024-01-01T00:00:00Z"},
+		},
+	})
+	return handler
+}
+
+// TestE2E_VersionNotFoundSuggestion covers case 1 from the "did you mean"
+// work: requesting a version that doesn't exist for a theme that does. The
+// error should name the closest existing version (same major, nearest
+// minor) as a ready-to-run command for the command that was actually run.
+func TestE2E_VersionNotFoundSuggestion(t *testing.T) {
+	t.Run("apply suggests the nearest minor version", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		env.SetupMockAPI(newCtpBlueMockAPI())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"apply", "a3chron/ctp-blue@1.2"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Equal(t,
+			"a3chron/ctp-blue has no version 1.2 - is that the right version?\n"+
+				"Available versions: 1.0, 1.1 (latest: 1.1)\n"+
+				"Did you mean: stellar apply a3chron/ctp-blue@1.1",
+			err.Error())
+	})
+
+	t.Run("preview suggests the nearest minor version, naming preview", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		env.SetupMockAPI(newCtpBlueMockAPI())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"preview", "a3chron/ctp-blue@1.2"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Did you mean: stellar preview a3chron/ctp-blue@1.1")
+	})
+
+	t.Run("info suggests the nearest minor version, naming info", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		env.SetupMockAPI(newCtpBlueMockAPI())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"info", "a3chron/ctp-blue@1.2"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Did you mean: stellar info a3chron/ctp-blue@1.1")
+	})
+
+	t.Run("falls back to the highest version when nothing shares a major", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		env.SetupMockAPI(newCtpBlueMockAPI())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"apply", "a3chron/ctp-blue@9.9"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Did you mean: stellar apply a3chron/ctp-blue@1.1")
+	})
+
+	t.Run("offline uses the local cache's versions instead of a network error", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		mockAPI := newCtpBlueMockAPI()
+		env.SetupMockAPI(mockAPI)
+		deadURL := env.MockServer.URL
+		env.MockServer.Close()
+		t.Setenv(paths.EnvAPIURL, deadURL)
+
+		// Only 1.0 is cached locally - the hub (were it reachable) also has
+		// 1.1, but that's irrelevant here: offline, the local cache is the
+		// only evidence available, and the message must be built from it,
+		// not a bare "are you offline?" error.
+		env.CreateThemeFile("a3chron", "ctp-blue", "1.0", testutil.SampleTOML())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"apply", "a3chron/ctp-blue@1.2"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), "are you offline")
+		assert.Contains(t, err.Error(), "has no version 1.2 - is that the right version?")
+		assert.Contains(t, err.Error(), "Available versions: 1.0 (latest: 1.0)")
+		assert.Contains(t, err.Error(), "Did you mean: stellar apply a3chron/ctp-blue@1.0")
+	})
+}
+
+// TestE2E_ThemeNotFoundSuggestion covers case 2: an author/slug that doesn't
+// exist at all, either because the slug is typo'd (same author) or the
+// author is wrong (right slug, published under someone else).
+func TestE2E_ThemeNotFoundSuggestion(t *testing.T) {
+	t.Run("typo'd slug under the right author suggests the real theme", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		env.SetupMockAPI(newCtpBlueMockAPI())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"apply", "a3chron/ctp-bleu"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Equal(t,
+			"no theme a3chron/ctp-bleu on stellar-hub - is that the right theme name?\n"+
+				"Did you mean: a3chron/ctp-blue",
+			err.Error())
+	})
+
+	t.Run("wrong author with the right slug reports no author and still suggests it", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		env.SetupMockAPI(newCtpBlueMockAPI())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"apply", "wrongauthor/ctp-blue"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Equal(t,
+			"no author wrongauthor on stellar-hub\n"+
+				"Did you mean: a3chron/ctp-blue",
+			err.Error())
+	})
+
+	t.Run("nothing close never suggests junk", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		env.SetupMockAPI(newCtpBlueMockAPI())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"apply", "a3chron/completely-unrelated-slug"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Equal(t, "no theme a3chron/completely-unrelated-slug on stellar-hub - is that the right theme name?", err.Error())
+		assert.NotContains(t, err.Error(), "Did you mean")
+	})
+
+	t.Run("local cache is a candidate source even when the hub has nothing", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		env.SetupMockAPI(testutil.NewMockAPIHandler()) // empty hub
+
+		env.CreateThemeFile("myauthor", "my-theme", "1.0", testutil.SampleTOML())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"apply", "myauthor/my-them"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Did you mean: myauthor/my-theme")
+	})
+}
+
+// TestE2E_NotFoundConsistentAcrossExplicitVersion is a regression test: an
+// author/slug that doesn't exist used to produce a different, less helpful
+// message when an explicit @version was given ("theme not found:
+// author/slug@version", straight from the download attempt) than when it
+// wasn't ("no theme author/slug on stellar-hub", from version resolution).
+// Both now go through the same theme-not-found path regardless of whether a
+// version was specified: the theme is what's missing, not the version, and
+// that must be reported identically either way.
+func TestE2E_NotFoundConsistentAcrossExplicitVersion(t *testing.T) {
+	t.Run("apply: with and without an explicit version match", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		env.SetupMockAPI(testutil.NewMockAPIHandler())
+
+		cmdNoVersion := NewRootCmd()
+		cmdNoVersion.SetArgs([]string{"apply", "nobody/nonexistent"})
+		cmdNoVersion.SetOut(new(bytes.Buffer))
+		errNoVersion := cmdNoVersion.Execute()
+		require.Error(t, errNoVersion)
+
+		resetFlags()
+		cmdWithVersion := NewRootCmd()
+		cmdWithVersion.SetArgs([]string{"apply", "nobody/nonexistent@1.2"})
+		cmdWithVersion.SetOut(new(bytes.Buffer))
+		errWithVersion := cmdWithVersion.Execute()
+		require.Error(t, errWithVersion)
+
+		assert.Equal(t, errNoVersion.Error(), errWithVersion.Error())
+		assert.Equal(t, "no author nobody on stellar-hub", errWithVersion.Error())
+	})
+
+	t.Run("preview: with and without an explicit version match", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		env.SetupMockAPI(testutil.NewMockAPIHandler())
+
+		cmdNoVersion := NewRootCmd()
+		cmdNoVersion.SetArgs([]string{"preview", "nobody/nonexistent"})
+		cmdNoVersion.SetOut(new(bytes.Buffer))
+		errNoVersion := cmdNoVersion.Execute()
+		require.Error(t, errNoVersion)
+
+		cmdWithVersion := NewRootCmd()
+		cmdWithVersion.SetArgs([]string{"preview", "nobody/nonexistent@1.2"})
+		cmdWithVersion.SetOut(new(bytes.Buffer))
+		errWithVersion := cmdWithVersion.Execute()
+		require.Error(t, errWithVersion)
+
+		assert.Equal(t, errNoVersion.Error(), errWithVersion.Error())
+		assert.Equal(t, "no author nobody on stellar-hub", errWithVersion.Error())
+	})
+
+	t.Run("info: with and without an explicit version match (single resolution path)", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		env.SetupMockAPI(testutil.NewMockAPIHandler())
+
+		cmdNoVersion := NewRootCmd()
+		cmdNoVersion.SetArgs([]string{"info", "nobody/nonexistent"})
+		cmdNoVersion.SetOut(new(bytes.Buffer))
+		errNoVersion := cmdNoVersion.Execute()
+		require.Error(t, errNoVersion)
+
+		cmdWithVersion := NewRootCmd()
+		cmdWithVersion.SetArgs([]string{"info", "nobody/nonexistent@1.2"})
+		cmdWithVersion.SetOut(new(bytes.Buffer))
+		errWithVersion := cmdWithVersion.Execute()
+		require.Error(t, errWithVersion)
+
+		assert.Equal(t, errNoVersion.Error(), errWithVersion.Error())
+		assert.Equal(t, "no author nobody on stellar-hub", errWithVersion.Error())
 	})
 }
 
