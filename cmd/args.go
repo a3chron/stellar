@@ -2,27 +2,34 @@ package cmd
 
 import "github.com/spf13/cobra"
 
-// argsWithUsage wraps a cobra.PositionalArgs validator so a genuine
-// argument-count mistake still prints the command's usage, even though the
-// root command sets SilenceUsage. SilenceUsage exists so a runtime error
-// (offline, theme not found, aborted confirmation, ...) doesn't dump the
-// whole usage block after it - but "you typed the wrong number of
-// arguments" is exactly the kind of mistake usage output is for, so commands
-// that take positional arguments wrap their validator with this instead of
-// passing e.g. cobra.ExactArgs(1) directly.
+// usageError marks an error as resulting from a genuine argument or flag
+// misuse (wrong arg count, unknown/bad flag) rather than a runtime failure
+// (offline, theme not found, aborted confirmation, ...). The central error
+// printer (printCLIError, in cmd/userError.go) shows the command's usage
+// block right after the "Error: ..." line for these, and only these -
+// mirroring cobra's own classic behaviour, just driven by this marker
+// instead of by toggling SilenceUsage per run.
 //
-// Rather than printing usage here (which would show it BEFORE cobra's own
-// "Error: ..." line once Execute() returns - the reverse of cobra's
-// classic order), this flips the root command's SilenceUsage off for the
-// rest of this run. Cobra's own post-Execute logic then prints "Error: ..."
-// followed by the usage block itself, in that order, exactly as it always
-// did before SilenceUsage was introduced on root. Root's flag only ever
-// matters for the one command that just ran, so mutating it here is safe.
+// Error() delegates to the wrapped error so err.Error() (and errors.Is/As
+// against it) reads exactly like the original cobra/pflag error - only
+// printCLIError ever looks for the usageError wrapper itself.
+type usageError struct {
+	err error
+}
+
+func (e *usageError) Error() string { return e.err.Error() }
+func (e *usageError) Unwrap() error { return e.err }
+
+// argsWithUsage wraps a cobra.PositionalArgs validator so a genuine
+// argument-count mistake still shows the command's usage - see usageError
+// above for how that's now signalled instead of the old
+// flip-SilenceUsage-and-let-cobra-print-it approach (which no longer applies
+// now that root sets both SilenceErrors and SilenceUsage permanently, and
+// prints everything itself in cmd.Execute/printCLIError).
 func argsWithUsage(validate cobra.PositionalArgs) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error {
 		if err := validate(cmd, args); err != nil {
-			cmd.Root().SilenceUsage = false
-			return err
+			return &usageError{err: err}
 		}
 		return nil
 	}

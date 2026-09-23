@@ -17,6 +17,18 @@ var (
 	forceRemove bool
 )
 
+// cacheNotFoundError reports that id (whatever form the caller wants shown -
+// "author/name" for a whole-theme removal, "author/name@version" for a
+// specific one) isn't in the local cache, with up to maxSuggestions "did you
+// mean" candidates drawn only from the local cache (gatherLocalThemeSuggestions)
+// - remove is a cache-only command, so a hub lookup here would suggest
+// themes the user would then still need to download, defeating the point of
+// a fast, offline-safe suggestion.
+func cacheNotFoundError(id, author, name string) error {
+	candidates := gatherLocalThemeSuggestions(author, name)
+	return newHintedError(fmt.Sprintf("%s isn't in your local cache", id), didYouMeanHints(candidates)...)
+}
+
 var removeCmd = &cobra.Command{
 	Use:   "remove [author/theme[@version]]...",
 	Short: "Remove one or more cached themes",
@@ -49,8 +61,8 @@ Use --force to remove the currently active theme.`,
 			// "latest" - nothing is ever stored under that name. Resolving it
 			// here keeps remove agreeing with apply: without this, "remove
 			// x/y@latest" looks for a latest.toml that apply no longer writes
-			// and reports "theme not found in cache" while the theme is sitting
-			// there, applied.
+			// and reports it isn't in the local cache while the theme is
+			// sitting there, applied.
 			//
 			// No version at all still means every version, as documented.
 			if t.VersionExplicit && t.Version == theme.LatestVersion {
@@ -58,7 +70,7 @@ Use --force to remove the currently active theme.`,
 				if dirErr != nil {
 					err = dirErr
 				} else if localVer, verErr := theme.FindLatestLocalVersion(themeDir); verErr != nil {
-					err = fmt.Errorf("theme not found in cache: %s/%s", t.Author, t.Name)
+					err = cacheNotFoundError(fmt.Sprintf("%s/%s", t.Author, t.Name), t.Author, t.Name)
 				} else {
 					t.Version = localVer
 					err = removeSpecificVersion(t, cfg)
@@ -68,8 +80,14 @@ Use --force to remove the currently active theme.`,
 			} else {
 				err = removeSpecificVersion(t, cfg)
 			}
+			// Every error returned by removeAllVersions/removeSpecificVersion
+			// (and cacheNotFoundError above) already names the theme itself,
+			// so it's appended as-is - wrapping it in another "identifier:
+			// ..." prefix here used to print the identifier twice (e.g.
+			// "a3chron/ctp-bleu: a3chron/ctp-bleu isn't in your local
+			// cache").
 			if err != nil {
-				errs = append(errs, fmt.Errorf("%s: %w", identifier, err))
+				errs = append(errs, err)
 			}
 		}
 
@@ -92,7 +110,7 @@ func removeAllVersions(t *theme.Theme, cfg *config.Config) error {
 
 	// Check if theme directory exists
 	if _, err := os.Stat(themeDir); os.IsNotExist(err) {
-		return fmt.Errorf("theme not found in cache: %s/%s", t.Author, t.Name)
+		return cacheNotFoundError(fmt.Sprintf("%s/%s", t.Author, t.Name), t.Author, t.Name)
 	}
 
 	// Check if current theme is in this directory
@@ -158,7 +176,7 @@ func removeSpecificVersion(t *theme.Theme, cfg *config.Config) error {
 
 	// Check if theme exists
 	if _, err := os.Stat(themePath); os.IsNotExist(err) {
-		return fmt.Errorf("theme not found in cache: %s", themeID)
+		return cacheNotFoundError(themeID, t.Author, t.Name)
 	}
 
 	// Remove theme file

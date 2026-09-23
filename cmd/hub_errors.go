@@ -100,17 +100,25 @@ func versionNotFoundError(cmdName string, t *theme.Theme, available []string) er
 
 	sorted := sortVersionsAscending(available)
 	if len(sorted) == 0 {
-		return errors.New(msg)
+		return newHintedError(msg)
 	}
 	latest := sorted[len(sorted)-1]
-	msg += fmt.Sprintf("\nAvailable versions: %s (latest: %s)", strings.Join(sorted, ", "), latest)
+
+	hints := []hint{{
+		label:  "Available versions",
+		values: []string{strings.Join(sorted, ", ")},
+		suffix: fmt.Sprintf("(latest: %s)", latest),
+	}}
 
 	if suggestion := closestVersion(t.Version, sorted); suggestion != "" {
 		suggested := &theme.Theme{Author: t.Author, Name: t.Name, Version: suggestion, VersionExplicit: true}
-		msg += fmt.Sprintf("\nDid you mean: stellar %s %s", cmdName, suggested.String())
+		hints = append(hints, hint{
+			label:  "Did you mean",
+			values: []string{fmt.Sprintf("stellar %s %s", cmdName, suggested.String())},
+		})
 	}
 
-	return errors.New(msg)
+	return newHintedError(msg, hints...)
 }
 
 // themeNotFoundError reports that author/slug doesn't exist on the hub at
@@ -130,18 +138,8 @@ func themeNotFoundError(author, slug string) error {
 		msg = fmt.Sprintf("no theme %s/%s on stellar-hub - is that the right theme name?", author, slug)
 	}
 
-	switch len(suggestions.candidates) {
-	case 0:
-		// Nothing close enough to suggest - say so and stop, rather than
-		// ever pointing at junk.
-	case 1:
-		msg += "\nDid you mean: " + suggestions.candidates[0]
-	default:
-		msg += "\nDid you mean:"
-		for _, c := range suggestions.candidates {
-			msg += "\n  " + c
-		}
-	}
-
-	return errors.New(msg)
+	// Nothing close enough to suggest - say so and stop, rather than ever
+	// pointing at junk (didYouMeanHints returns no hints for an empty
+	// candidate list).
+	return newHintedError(msg, didYouMeanHints(suggestions.candidates)...)
 }

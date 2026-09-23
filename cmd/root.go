@@ -22,9 +22,17 @@ func NewRootCmd() *cobra.Command {
 		// ...) has nothing to do with how the command was invoked, so dumping
 		// the whole usage block after it is just noise. Genuine
 		// argument/flag misuse still gets usage - see argsWithUsage (Args
-		// validators) and SetFlagErrorFunc below, which both print it
-		// explicitly despite this being set.
+		// validators) and SetFlagErrorFunc below, which mark such errors with
+		// usageError; printCLIError (cmd/userError.go) is what actually shows
+		// usage for those, since SilenceUsage below is never toggled back off.
 		SilenceUsage: true,
+		// stellar prints every error itself (bold "Error:" prefix, coloured
+		// hints, usage-on-misuse - see printCLIError) via ExecuteCmd/Execute
+		// below, instead of letting cobra print its own plain "Error: ..."
+		// line first. Without this, a hinted error would be printed twice:
+		// once (uncoloured) by cobra inside rootCmd.Execute(), and once more
+		// by ExecuteCmd.
+		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			// Shell completion runs this on every keystroke, so it must not
 			// touch the filesystem - and must not fail: an error here prints
@@ -61,14 +69,12 @@ func NewRootCmd() *cobra.Command {
 
 	// Flag-parsing errors (unknown flag, bad value, ...) are always a usage
 	// mistake, never a runtime failure, so they always get the usage block
-	// printed regardless of SilenceUsage above - see argsWithUsage for why
-	// this flips root's SilenceUsage off instead of calling c.Usage()
-	// directly (that would print usage before cobra's own "Error: ..."
-	// line, not after it). SetFlagErrorFunc is inherited by every
-	// subcommand that doesn't set its own.
+	// printed - see usageError (cmd/args.go) and printCLIError
+	// (cmd/userError.go) for how that's shown despite SilenceUsage above.
+	// SetFlagErrorFunc is inherited by every subcommand that doesn't set its
+	// own.
 	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
-		c.Root().SilenceUsage = false
-		return err
+		return &usageError{err: err}
 	})
 
 	// Add subcommands
@@ -99,6 +105,22 @@ func isCompletionRequest(cmd *cobra.Command) bool {
 	return false
 }
 
+// ExecuteCmd runs c and, on error, prints it through printCLIError: a bold
+// red "Error:" line, any hints (coloured, indented), and - only for a
+// genuine argument/flag misuse (usageError) - the resolved subcommand's
+// usage block right after, in that order. This is what the real binary's
+// main() runs (via Execute below); it's exported so tests can exercise the
+// exact same execute-then-print path a user sees on their terminal, instead
+// of relying on cobra's own error/usage printing, which root's
+// SilenceErrors/SilenceUsage now turn off in favour of doing it all here.
+func ExecuteCmd(c *cobra.Command) error {
+	executed, err := c.ExecuteC()
+	if err != nil {
+		printCLIError(executed, err)
+	}
+	return err
+}
+
 func Execute() error {
-	return rootCmd.Execute()
+	return ExecuteCmd(rootCmd)
 }

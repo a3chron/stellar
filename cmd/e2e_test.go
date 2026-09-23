@@ -899,7 +899,8 @@ func TestE2E_Remove(t *testing.T) {
 		// non-zero) rather than a silently-successful no-op.
 		err := cmd.Execute()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "not found in cache")
+		assert.Equal(t, "nobody/nothing@1.0 isn't in your local cache", err.Error(),
+			"a cache miss with nothing to suggest must not repeat the identifier")
 	})
 
 	t.Run("Invalid identifier errors", func(t *testing.T) {
@@ -2392,6 +2393,13 @@ func TestE2E_SecurityWarningSharedAcrossCommands(t *testing.T) {
 // SilenceUsage Tests
 // =============================================================================
 
+// These three exercise the actual execute-then-print path a user's terminal
+// sees (ExecuteCmd, cmd/root.go) rather than cobra's own error/usage
+// printing directly - root sets both SilenceErrors and SilenceUsage
+// permanently now (see cmd/root.go), so a bare cmd.Execute() no longer
+// prints anything on its own; printCLIError is what decides whether usage
+// follows the error, driven by the usageError marker (cmd/args.go) instead
+// of by cobra's SilenceUsage toggling.
 func TestE2E_SilenceUsage(t *testing.T) {
 	t.Run("Runtime error does not print usage", func(t *testing.T) {
 		env := testutil.SetupTestEnv(t)
@@ -2406,7 +2414,7 @@ func TestE2E_SilenceUsage(t *testing.T) {
 		cmd.SetErr(buf)
 		cmd.SetArgs([]string{"apply", "nobody/nothing@1.0"})
 
-		err := cmd.Execute()
+		err := ExecuteCmd(cmd)
 		assert.Error(t, err)
 		assert.NotContains(t, buf.String(), "Usage:", "a runtime error must not dump the usage block")
 	})
@@ -2421,7 +2429,7 @@ func TestE2E_SilenceUsage(t *testing.T) {
 		cmd.SetErr(buf)
 		cmd.SetArgs([]string{"apply"}) // missing required identifier
 
-		err := cmd.Execute()
+		err := ExecuteCmd(cmd)
 		assert.Error(t, err)
 		assert.Contains(t, buf.String(), "Usage:", "a genuine argument mistake should still show usage")
 	})
@@ -2436,7 +2444,7 @@ func TestE2E_SilenceUsage(t *testing.T) {
 		cmd.SetErr(buf)
 		cmd.SetArgs([]string{"apply", "--no-such-flag", "a/b"})
 
-		err := cmd.Execute()
+		err := ExecuteCmd(cmd)
 		assert.Error(t, err)
 		assert.Contains(t, buf.String(), "Usage:")
 	})
@@ -3341,7 +3349,9 @@ func TestE2E_InfoLocalOnlyFallback(t *testing.T) {
 // TestE2E_NoArgsCommandsRejectArgs covers the argsWithUsage(cobra.NoArgs)
 // additions: rollback, clean, current, list and update take no positional
 // arguments, so an unexpected one must be refused with usage shown, not
-// silently ignored.
+// silently ignored. Goes through ExecuteCmd (see the comment on
+// TestE2E_SilenceUsage) since that's what now decides whether usage is
+// printed, not cobra's own SilenceUsage handling.
 func TestE2E_NoArgsCommandsRejectArgs(t *testing.T) {
 	for _, name := range []string{"rollback", "clean", "current", "list", "update"} {
 		t.Run(name, func(t *testing.T) {
@@ -3354,18 +3364,18 @@ func TestE2E_NoArgsCommandsRejectArgs(t *testing.T) {
 			cmd.SetErr(buf)
 			cmd.SetArgs([]string{name, "unexpected-arg"})
 
-			err := cmd.Execute()
+			err := ExecuteCmd(cmd)
 			assert.Error(t, err)
 			assert.Contains(t, buf.String(), "Usage:", "args: %v", name)
 		})
 	}
 }
 
-// TestE2E_ErrorPrintedBeforeUsage covers the args.go/root.go nit: for a
-// genuine usage mistake, cobra's "Error: ..." line must appear BEFORE the
-// usage block, the order cobra always used before SilenceUsage was
-// introduced on root - not after it, which argsWithUsage's original
-// cmd.Usage() workaround produced.
+// TestE2E_ErrorPrintedBeforeUsage covers the args.go/root.go/userError.go
+// nit: for a genuine usage mistake, the "Error: ..." line must appear BEFORE
+// the usage block - the order cobra always used, now reproduced by
+// printCLIError (via ExecuteCmd) instead of cobra's own printing, which root
+// permanently silences (see cmd/root.go).
 func TestE2E_ErrorPrintedBeforeUsage(t *testing.T) {
 	_ = testutil.SetupTestEnv(t)
 	resetFlags()
@@ -3376,7 +3386,7 @@ func TestE2E_ErrorPrintedBeforeUsage(t *testing.T) {
 	cmd.SetErr(buf)
 	cmd.SetArgs([]string{"apply"}) // missing required identifier
 
-	err := cmd.Execute()
+	err := ExecuteCmd(cmd)
 	require.Error(t, err)
 
 	out := buf.String()
@@ -3416,4 +3426,218 @@ func TestE2E_PreviewTerminalNotFoundWarning(t *testing.T) {
 	require.NoError(t, execErr)
 	assert.Contains(t, output, "no-such-terminal-xyz")
 	assert.Contains(t, output, "not found on PATH")
+}
+
+// =============================================================================
+// Structured/coloured error output (cmd/userError.go)
+// =============================================================================
+
+// TestE2E_StructuredErrorOutput covers the new hintedError-based printing:
+// every command still goes through ExecuteCmd's central printCLIError, so
+// these check the exact rendered shape (colour codes are stripped by
+// fatih/color itself in this non-TTY test process - see cmd/userError.go -
+// so the assertions below double as "plain text stays exactly what it was"
+// checks too).
+func TestE2E_StructuredErrorOutput(t *testing.T) {
+	t.Run("ordinary error prints Error: exactly once, no hints", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		_ = env
+
+		cmd := NewRootCmd()
+		buf := new(bytes.Buffer)
+		cmd.SetOut(buf)
+		cmd.SetErr(buf)
+		cmd.SetArgs([]string{"rollback"})
+
+		err := ExecuteCmd(cmd)
+		require.Error(t, err)
+
+		out := buf.String()
+		assert.Equal(t, 1, strings.Count(out, "Error:"), "an error must be printed exactly once")
+		assert.Equal(t, "Error: no previous theme to roll back to\n", out)
+	})
+
+	t.Run("version-not-found hint lines are indented under the error", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		env.SetupMockAPI(newCtpBlueMockAPI())
+
+		cmd := NewRootCmd()
+		buf := new(bytes.Buffer)
+		cmd.SetOut(buf)
+		cmd.SetErr(buf)
+		cmd.SetArgs([]string{"apply", "a3chron/ctp-blue@1.2"})
+
+		err := ExecuteCmd(cmd)
+		require.Error(t, err)
+
+		assert.Equal(t,
+			"Error: a3chron/ctp-blue has no version 1.2 - is that the right version?\n"+
+				"  Available versions: 1.0, 1.1 (latest: 1.1)\n"+
+				"  Did you mean: stellar apply a3chron/ctp-blue@1.1\n",
+			buf.String())
+		assert.Equal(t, 1, strings.Count(buf.String(), "Error:"))
+	})
+
+	t.Run("single theme-not-found suggestion is indented under the error", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		env.SetupMockAPI(newCtpBlueMockAPI())
+
+		cmd := NewRootCmd()
+		buf := new(bytes.Buffer)
+		cmd.SetOut(buf)
+		cmd.SetErr(buf)
+		cmd.SetArgs([]string{"apply", "a3chron/ctp-bleu"})
+
+		err := ExecuteCmd(cmd)
+		require.Error(t, err)
+
+		assert.Equal(t,
+			"Error: no theme a3chron/ctp-bleu on stellar-hub - is that the right theme name?\n"+
+				"  Did you mean: a3chron/ctp-blue\n",
+			buf.String())
+	})
+
+	t.Run("several did-you-mean candidates print one per line, indented under the label", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		handler := testutil.NewMockAPIHandler()
+		handler.AddTheme(testutil.MockTheme{
+			ID: "ctp-blue-id", Author: "a3chron", Slug: "ctp-blue", Name: "Catppuccin Blue",
+			Versions: []testutil.MockVersion{{Version: "1.0", ConfigContent: testutil.SampleTOML()}},
+		})
+		handler.AddTheme(testutil.MockTheme{
+			ID: "ctp-bleus-id", Author: "a3chron", Slug: "ctp-bleus", Name: "Catppuccin Bleus",
+			Versions: []testutil.MockVersion{{Version: "1.0", ConfigContent: testutil.SampleTOML()}},
+		})
+		env.SetupMockAPI(handler)
+
+		cmd := NewRootCmd()
+		buf := new(bytes.Buffer)
+		cmd.SetOut(buf)
+		cmd.SetErr(buf)
+		cmd.SetArgs([]string{"apply", "a3chron/ctp-bleu"})
+
+		err := ExecuteCmd(cmd)
+		require.Error(t, err)
+
+		out := buf.String()
+		require.Contains(t, out, "  Did you mean:\n", "the label line has no inline value once there's more than one candidate")
+		assert.Contains(t, out, "\n    a3chron/ctp-blue\n")
+		assert.Contains(t, out, "\n    a3chron/ctp-bleus")
+	})
+
+	t.Run("remove with several identifiers reports one clean Error: line per failure", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+		// "bob/missing" is never created - nothing close enough is cached
+		// either, so its failure carries no "did you mean" hint.
+
+		cmd := NewRootCmd()
+		buf := new(bytes.Buffer)
+		cmd.SetOut(buf)
+		cmd.SetErr(buf)
+		cmd.SetArgs([]string{"remove", "alice/rainbow@1.0", "bob/missing@1.0"})
+
+		err := ExecuteCmd(cmd)
+		require.Error(t, err)
+
+		out := buf.String()
+		assert.Equal(t, 1, strings.Count(out, "Error:"), "only the one failing identifier should produce an Error: line")
+		assert.Contains(t, out, "Error: bob/missing@1.0 isn't in your local cache\n")
+		assert.NotContains(t, out, "bob/missing@1.0: bob/missing@1.0",
+			"the identifier must not be printed twice")
+	})
+}
+
+// =============================================================================
+// Remove: cache-only "did you mean" suggestions (no network)
+// =============================================================================
+
+// TestE2E_RemoveCacheOnlySuggestions covers item 2 of the error-output work:
+// `stellar remove` on an identifier that isn't cached now says so plainly
+// ("... isn't in your local cache") instead of the old, redundant
+// "<id>: theme not found in cache: <id>", and its "did you mean" suggestions
+// come only from the local cache (gatherLocalThemeSuggestions in
+// cmd/suggest.go) - never the hub, since remove can only ever act on what's
+// already on disk.
+func TestE2E_RemoveCacheOnlySuggestions(t *testing.T) {
+	t.Run("suggests a close cached theme, matching identifiers exactly once", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"remove", "alice/raimbow"}) // typo: "raimbow"
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Equal(t,
+			"alice/raimbow isn't in your local cache\nDid you mean: alice/rainbow",
+			err.Error())
+	})
+
+	t.Run("nothing cached means no suggestion, and no hub lookup", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		// Point the API at a closed server: if remove's suggestion path ever
+		// made a hub call, this would surface as a hang or a network error
+		// instead of the clean, immediate cache-only message below.
+		env.SetupMockAPI(testutil.NewMockAPIHandler())
+		deadURL := env.MockServer.URL
+		env.MockServer.Close()
+		t.Setenv(paths.EnvAPIURL, deadURL)
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"remove", "nobody/nothing@1.0"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Equal(t, "nobody/nothing@1.0 isn't in your local cache", err.Error())
+	})
+
+	t.Run("a hub-only theme is never suggested for a cache miss", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		// Published on the hub, but never downloaded - remove must not
+		// suggest it, since it has nothing to remove there either.
+		env.SetupMockAPI(newCtpBlueMockAPI())
+		env.CreateThemeFile("a3chron", "ctp-red", "1.0", testutil.SampleTOML())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"remove", "a3chron/ctp-bleu"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), "ctp-blue",
+			"ctp-blue only exists on the hub, never cached - it must not be suggested")
+	})
+
+	t.Run("@latest with nothing cached reports the cache miss with a suggestion", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"remove", "alice/raimbow@latest"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Equal(t,
+			"alice/raimbow isn't in your local cache\nDid you mean: alice/rainbow",
+			err.Error())
+	})
 }

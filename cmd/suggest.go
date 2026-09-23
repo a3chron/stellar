@@ -254,6 +254,28 @@ func gatherThemeSuggestions(author, slug string) themeSuggestions {
 	return result
 }
 
+// gatherLocalThemeSuggestions looks for cached themes close to author/slug,
+// using only the local cache - no hub calls. Used by cache-only commands
+// (e.g. `stellar remove` reporting an identifier that isn't cached) where a
+// hub lookup would be beside the point: the error already means "stellar
+// has nothing cached for this", so the only honest source for "did you
+// mean" here is what's actually on disk.
+func gatherLocalThemeSuggestions(author, slug string) []string {
+	var candidates []themeCandidate
+
+	if cached, err := cache.ListCachedThemes(); err == nil {
+		for _, id := range cached {
+			ct, perr := theme.ParseIdentifier(id)
+			if perr != nil {
+				continue
+			}
+			candidates = append(candidates, themeCandidate{author: ct.Author, slug: ct.Name})
+		}
+	}
+
+	return rankThemeCandidates(author, slug, candidates)
+}
+
 // damerauLevenshtein computes the optimal-string-alignment edit distance
 // between a and b: insertions, deletions, substitutions, and transpositions
 // of adjacent characters each cost 1. It operates on whatever runes are

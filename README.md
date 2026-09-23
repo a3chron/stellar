@@ -354,7 +354,7 @@ These come from the `[custom]`-command confirmation prompt (see [Confirmations a
 ### Exit codes
 
 `stellar remove` and `stellar rollback` exit non-zero on a refusal, not just a crash:
-- `stellar remove` with several identifiers removes as many as it can and still exits `1` if any of them failed (already-active theme without `--force`, not found in cache, ...) - the successful removals are not rolled back.
+- `stellar remove` with several identifiers removes as many as it can and still exits `1` if any of them failed (already-active theme without `--force`, not in your local cache, ...) - the successful removals are not rolled back.
 - `stellar rollback` exits `1` when there's nothing to roll back to: no previous theme recorded yet, or previous and current are the same theme (this happens after re-applying the same theme with an older stellar version; applying a different theme fixes it going forward).
 
 ## Telemetry
