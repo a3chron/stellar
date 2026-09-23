@@ -31,9 +31,11 @@ func printThemeFileMissing(cfg *config.Config, expectedLabel string) {
 }
 
 var currentCmd = &cobra.Command{
-	Use:   "current",
-	Short: "Show the currently applied theme",
-	Long:  `Display information about the theme that is currently active.`,
+	Use:     "current",
+	Short:   "Show the currently applied theme",
+	Long:    `Display information about the theme that is currently active.`,
+	Example: `  stellar current`,
+	Args:    argsWithUsage(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Load config
 		cfg, err := config.Load()

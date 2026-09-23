@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -198,4 +199,42 @@ func TestCleanupUpdateLeftovers_RemovesRealArtifacts(t *testing.T) {
 
 	assert.NoFileExists(t, oldBinary, "leftover .old binary next to the real binary should be removed")
 	assert.NoFileExists(t, tmpUpdate, "leftover update temp file next to the real binary should be removed")
+}
+
+// TestDetectUnmanagedInstall covers the pre-download guard that turns a
+// package-manager install (Nix, or any directory this user can't write to)
+// into a clear message instead of a raw CreateTemp permission error surfacing
+// only after the whole release has already been downloaded.
+func TestDetectUnmanagedInstall(t *testing.T) {
+	t.Run("Nix store path is detected without touching the filesystem", func(t *testing.T) {
+		msg := detectUnmanagedInstall("/nix/store/abcdef123-stellar-1.0.0/bin/stellar")
+		assert.Contains(t, msg, "Nix")
+	})
+
+	t.Run("Writable directory is not flagged", func(t *testing.T) {
+		dir := t.TempDir()
+		msg := detectUnmanagedInstall(filepath.Join(dir, "stellar"))
+		assert.Empty(t, msg)
+	})
+
+	t.Run("Unwritable directory is flagged", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("permission bits don't work the same way on Windows")
+		}
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores directory permission bits")
+		}
+
+		dir := t.TempDir()
+		require.NoError(t, os.Chmod(dir, 0555))
+		t.Cleanup(func() { _ = os.Chmod(dir, 0755) })
+
+		msg := detectUnmanagedInstall(filepath.Join(dir, "stellar"))
+		assert.Contains(t, msg, "not writable")
+	})
+}
+
+func TestIsDirWritable(t *testing.T) {
+	dir := t.TempDir()
+	assert.True(t, isDirWritable(dir))
 }

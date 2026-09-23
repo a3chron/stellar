@@ -63,6 +63,28 @@ func SetupTestEnv(t *testing.T) *TestEnv {
 	env.origEnv[paths.EnvApplyMode] = os.Getenv(paths.EnvApplyMode)
 	env.origEnv[paths.EnvNoTelemetry] = os.Getenv(paths.EnvNoTelemetry)
 	env.origEnv[paths.EnvDoNotTrack] = os.Getenv(paths.EnvDoNotTrack)
+	// STARSHIP_CONFIG isn't a stellar-owned env var, but apply/rollback now
+	// warn when it points somewhere other than the file stellar manages (see
+	// cmd.warnPostApplyEnvironment). A developer's own shell commonly has it
+	// set (to their real starship.toml), which would otherwise leak into
+	// every test's output and make that warning's presence/absence
+	// environment-dependent instead of deterministic.
+	env.origEnv["STARSHIP_CONFIG"] = os.Getenv("STARSHIP_CONFIG")
+	_ = os.Unsetenv("STARSHIP_CONFIG")
+
+	// TERMINAL/DISPLAY/WAYLAND_DISPLAY affect `stellar preview`'s terminal
+	// selection (see cmd/preview.go's previewTerminalCandidates). Clearing
+	// them keeps that selection - and any assertions about it - independent
+	// of whatever desktop session happens to be running the tests, instead
+	// of depending on the developer's own $TERMINAL or a real X/Wayland
+	// session being present. This is belt-and-suspenders alongside
+	// cmd.startTerminal's testing.Testing() guard, which is what actually
+	// stops a test from ever spawning a real terminal window - this just
+	// keeps output deterministic.
+	for _, key := range []string{"TERMINAL", "DISPLAY", "WAYLAND_DISPLAY"} {
+		env.origEnv[key] = os.Getenv(key)
+		_ = os.Unsetenv(key)
+	}
 
 	// Telemetry is off by default in tests. Any test that pins a non-dev
 	// version (the update tests do) would otherwise POST a real install

@@ -99,7 +99,13 @@ func ParseIdentifier(identifier string) (*Theme, error) {
 	matches := re.FindStringSubmatch(identifier)
 
 	if matches == nil {
-		return nil, fmt.Errorf("invalid theme identifier: %s (expected format: author/theme[@version])", identifier)
+		return nil, fmt.Errorf(
+			"invalid theme identifier: %s (expected format: author/theme[@version] - "+
+				"author and theme may contain only letters, digits, '_' and '-'; "+
+				"version must be X.Y or \"latest\" (e.g. author/theme@1.2, not @1.2.3 - "+
+				"themes use minor/patch updates only, a breaking change is published as a new theme))",
+			identifier,
+		)
 	}
 
 	theme := &Theme{

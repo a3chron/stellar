@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -25,7 +26,10 @@ Without a version: removes all versions of the theme
 With a version: removes only that specific version
 
 Use --force to remove the currently active theme.`,
-	Args: cobra.MinimumNArgs(1),
+	Example: `  stellar remove a3chron/ctp-green
+  stellar remove a3chron/ctp-green@1.0
+  stellar remove a3chron/ctp-green a3chron/ctp-red`,
+	Args: argsWithUsage(cobra.MinimumNArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Load config once for all removals
 		cfg, err := config.Load()
@@ -37,7 +41,6 @@ Use --force to remove the currently active theme.`,
 		for _, identifier := range args {
 			t, err := theme.ParseIdentifier(identifier)
 			if err != nil {
-				color.Red("Error parsing %q: %v", identifier, err)
 				errs = append(errs, err)
 				continue
 			}
@@ -66,13 +69,16 @@ Use --force to remove the currently active theme.`,
 				err = removeSpecificVersion(t, cfg)
 			}
 			if err != nil {
-				color.Red("Error removing %q: %v", identifier, err)
-				errs = append(errs, err)
+				errs = append(errs, fmt.Errorf("%s: %w", identifier, err))
 			}
 		}
 
+		// A refusal (active theme, not cached) or a parse error must exit
+		// non-zero like any other failure - errors.Join keeps every reason
+		// in the returned error's text (cobra prints it once via
+		// "Error: ..."), instead of collapsing them into just a count.
 		if len(errs) > 0 {
-			return fmt.Errorf("%d removal(s) failed", len(errs))
+			return errors.Join(errs...)
 		}
 		return nil
 	},
@@ -86,8 +92,7 @@ func removeAllVersions(t *theme.Theme, cfg *config.Config) error {
 
 	// Check if theme directory exists
 	if _, err := os.Stat(themeDir); os.IsNotExist(err) {
-		color.Yellow("Theme not found in cache: %s/%s", t.Author, t.Name)
-		return nil
+		return fmt.Errorf("theme not found in cache: %s/%s", t.Author, t.Name)
 	}
 
 	// Check if current theme is in this directory
@@ -100,11 +105,11 @@ func removeAllVersions(t *theme.Theme, cfg *config.Config) error {
 	}
 
 	if currentThemeInDir && !forceRemove {
-		color.Yellow("Cannot remove theme containing currently active version: %s/%s", t.Author, t.Name)
-		fmt.Println("\nOptions:")
-		fmt.Println("  1. Apply a different theme first")
-		fmt.Println("  2. Use --force to remove anyway")
-		return nil
+		return fmt.Errorf(
+			"cannot remove theme containing currently active version: %s/%s "+
+				"(apply a different theme first, or use --force)",
+			t.Author, t.Name,
+		)
 	}
 
 	// Remove the entire theme directory
@@ -145,17 +150,15 @@ func removeSpecificVersion(t *theme.Theme, cfg *config.Config) error {
 	// Check if trying to remove current theme
 	themeID := t.String()
 	if themeID == cfg.CurrentTheme && !forceRemove {
-		color.Yellow("Cannot remove currently active theme: %s", themeID)
-		fmt.Println("\nOptions:")
-		fmt.Println("  1. Apply a different theme first")
-		fmt.Println("  2. Use --force to remove anyway")
-		return nil
+		return fmt.Errorf(
+			"cannot remove currently active theme: %s (apply a different theme first, or use --force)",
+			themeID,
+		)
 	}
 
 	// Check if theme exists
 	if _, err := os.Stat(themePath); os.IsNotExist(err) {
-		color.Yellow("Theme not found in cache: %s", themeID)
-		return nil
+		return fmt.Errorf("theme not found in cache: %s", themeID)
 	}
 
 	// Remove theme file

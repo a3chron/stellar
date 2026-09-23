@@ -9,10 +9,19 @@ import (
 )
 
 type Config struct {
-	CurrentTheme     string   `json:"current_theme"` // "alice/rainbow@1.2"
-	CurrentPath      string   `json:"current_path"`  // Full path to .toml
-	PreviousTheme    string   `json:"previous_theme,omitempty"`
-	PreviousPath     string   `json:"previous_path,omitempty"`
+	CurrentTheme  string `json:"current_theme"` // "alice/rainbow@1.2"
+	CurrentPath   string `json:"current_path"`  // Full path to .toml
+	PreviousTheme string `json:"previous_theme,omitempty"`
+	PreviousPath  string `json:"previous_path,omitempty"`
+	// Note: a "previous_hash" field used to live here (rollback used it to
+	// tell a hand-edited previous theme from an unchanged one, prompting for
+	// [custom] commands only in the "changed" case). It's gone now: rollback
+	// no longer prompts for [custom] commands on a cached previous theme at
+	// all, matching how apply treats an already-cached theme - see
+	// cmd/rollback.go. encoding/json silently ignores an unknown
+	// "previous_hash" key, so a config.json written by an older stellar
+	// build still loads fine; the field is just never populated or read
+	// again.
 	DownloadedThemes []string `json:"downloaded_themes,omitempty"` // ["alice/rainbow", "bob/sunset"]
 	// AppliedHash is the SHA-256 hex hash of the content stellar last wrote to
 	// starship.toml. It lets stellar recognize its own applied file regardless

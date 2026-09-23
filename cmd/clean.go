@@ -17,6 +17,9 @@ var cleanCmd = &cobra.Command{
 	Use:   "clean",
 	Short: "Remove cached themes",
 	Long:  `Remove all cached themes except the currently applied one. Use --all to remove everything.`,
+	Example: `  stellar clean
+  stellar clean --all`,
+	Args: argsWithUsage(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Get current theme to preserve it
 		cfg, err := config.Load()

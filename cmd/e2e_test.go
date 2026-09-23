@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -859,8 +860,10 @@ func TestE2E_Remove(t *testing.T) {
 		cmd.SetArgs([]string{"remove", "alice/rainbow@1.0"})
 		cmd.SetOut(new(bytes.Buffer))
 
+		// A refusal to remove the active theme must exit non-zero, not
+		// silently succeed - a script checking $? needs to see it failed.
 		err := cmd.Execute()
-		require.NoError(t, err)
+		require.Error(t, err)
 		assert.True(t, env.FileExists(themePath))
 	})
 
@@ -884,7 +887,7 @@ func TestE2E_Remove(t *testing.T) {
 		assert.False(t, env.FileExists(themePath))
 	})
 
-	t.Run("Nonexistent theme graceful", func(t *testing.T) {
+	t.Run("Nonexistent theme errors clearly", func(t *testing.T) {
 		_ = testutil.SetupTestEnv(t)
 		resetFlags()
 
@@ -892,8 +895,11 @@ func TestE2E_Remove(t *testing.T) {
 		cmd.SetArgs([]string{"remove", "nobody/nothing@1.0"})
 		cmd.SetOut(new(bytes.Buffer))
 
+		// A theme that was never cached must be a clean, clear error (exit
+		// non-zero) rather than a silently-successful no-op.
 		err := cmd.Execute()
-		assert.NoError(t, err)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not found in cache")
 	})
 
 	t.Run("Invalid identifier errors", func(t *testing.T) {
@@ -933,6 +939,7 @@ func TestE2E_Remove(t *testing.T) {
 func TestE2E_Rollback(t *testing.T) {
 	t.Run("No previous theme", func(t *testing.T) {
 		env := testutil.SetupTestEnv(t)
+		resetFlags()
 
 		config := `{
   "current_theme": "alice/rainbow@1.0",
@@ -944,13 +951,18 @@ func TestE2E_Rollback(t *testing.T) {
 		cmd.SetArgs([]string{"rollback"})
 		cmd.SetOut(new(bytes.Buffer))
 
+		// A refusal like "nothing to roll back to" must exit non-zero, same
+		// as the previous-equals-current case below - it used to exit 0,
+		// indistinguishable from an actual rollback.
 		err := cmd.Execute()
-		require.NoError(t, err)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no previous theme")
 	})
 
 	t.Run("Swaps current and previous", func(t *testing.T) {
 		testutil.RequireSymlinks(t)
 		env := testutil.SetupTestEnv(t)
+		resetFlags()
 
 		currentPath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
 		previousPath := env.CreateThemeFile("bob", "sunset", "2.0", testutil.SampleTOML())
@@ -977,6 +989,7 @@ func TestE2E_Rollback(t *testing.T) {
 
 	t.Run("Swaps current and previous (copy mode)", func(t *testing.T) {
 		env := testutil.SetupTestEnv(t)
+		resetFlags()
 		t.Setenv(paths.EnvApplyMode, "copy")
 
 		currentPath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
@@ -993,7 +1006,9 @@ func TestE2E_Rollback(t *testing.T) {
 		env.CreateConfig(config)
 
 		cmd := NewRootCmd()
-		cmd.SetArgs([]string{"rollback"})
+		// --force: the previous theme has [custom] commands, and this test is
+		// about the copy-mode swap, not the security prompt.
+		cmd.SetArgs([]string{"rollback", "--force"})
 		cmd.SetOut(new(bytes.Buffer))
 
 		err := cmd.Execute()
@@ -1008,6 +1023,7 @@ func TestE2E_Rollback(t *testing.T) {
 		// Regression for the silent-rollback-backup bug: rollback must print
 		// the same backup notice apply does whenever backupPath != "".
 		env := testutil.SetupTestEnv(t)
+		resetFlags()
 		t.Setenv(paths.EnvApplyMode, "copy")
 
 		currentPath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
@@ -1029,7 +1045,9 @@ func TestE2E_Rollback(t *testing.T) {
 		var execErr error
 		output := testutil.CaptureOutput(t, func() {
 			cmd := NewRootCmd()
-			cmd.SetArgs([]string{"rollback"})
+			// --force: the previous theme has [custom] commands, and this
+			// test is about the backup notice, not the security prompt.
+			cmd.SetArgs([]string{"rollback", "--force"})
 			cmd.SetOut(new(bytes.Buffer))
 			execErr = cmd.Execute()
 		})
@@ -1043,6 +1061,7 @@ func TestE2E_Rollback(t *testing.T) {
 	t.Run("Double rollback returns to original", func(t *testing.T) {
 		testutil.RequireSymlinks(t)
 		env := testutil.SetupTestEnv(t)
+		resetFlags()
 
 		currentPath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
 		previousPath := env.CreateThemeFile("bob", "sunset", "2.0", testutil.SampleTOML())
@@ -1070,6 +1089,7 @@ func TestE2E_Rollback(t *testing.T) {
 	t.Run("Redownloads missing theme", func(t *testing.T) {
 		testutil.RequireSymlinks(t)
 		env := testutil.SetupTestEnv(t)
+		resetFlags()
 
 		mockAPI := testutil.CreateDefaultMockAPI()
 		env.SetupMockAPI(mockAPI)
@@ -1103,6 +1123,7 @@ func TestE2E_Rollback(t *testing.T) {
 
 	t.Run("Missing previous path errors", func(t *testing.T) {
 		env := testutil.SetupTestEnv(t)
+		resetFlags()
 
 		config := `{
   "current_theme": "alice/rainbow@1.0",
@@ -1860,6 +1881,10 @@ func resetFlags() {
 	cleanAll = false
 	uninstallYes = false
 	uninstallKeepConfig = false
+	rollbackForce = false
+	previewForce = false
+	previewShell = ""
+	previewTerminal = ""
 }
 
 // pinVersion sets versionInfo to a known non-dev version (IsDev() gates
@@ -2078,4 +2103,1057 @@ func TestE2E_ExplicitLatestIsConsistentAcrossCommands(t *testing.T) {
 		assert.False(t, env.FileExists(
 			filepath.Join(env.StellarDir, "testuser", "sample-theme", "1.2.toml")))
 	})
+}
+
+// =============================================================================
+// Foreign Symlink Tests
+//
+// IsManaged used to treat ANY symlink at starship.toml as stellar's own, so a
+// user with a dotfiles manager (stow/chezmoi/home-manager) symlinking
+// ~/.config/starship.toml into their dotfiles repo would silently lose that
+// link - and its content - the first time they ran `stellar apply`.
+// =============================================================================
+
+func TestE2E_ApplyForeignSymlink(t *testing.T) {
+	t.Run("Foreign symlink is backed up and reported", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		// Simulate a dotfiles-managed starship.toml: a symlink pointing
+		// somewhere OUTSIDE stellar's home, e.g. a stow/chezmoi/home-manager
+		// repo.
+		dotfilesDir := filepath.Join(env.RootDir, "dotfiles")
+		require.NoError(t, os.MkdirAll(dotfilesDir, 0755))
+		dotfilesConfig := filepath.Join(dotfilesDir, "starship.toml")
+		dotfilesContent := "# managed by a dotfiles tool\nformat = \"$all\"\n"
+		require.NoError(t, os.WriteFile(dotfilesConfig, []byte(dotfilesContent), 0644))
+		require.NoError(t, os.Symlink(dotfilesConfig, env.StarshipPath))
+
+		env.CreateThemeFile("local", "mytheme", "1.0", testutil.SampleTOML())
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"apply", "local/mytheme@1.0"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+
+		assert.Contains(t, output, "was a symlink to")
+		assert.Contains(t, output, dotfilesConfig)
+		assert.Contains(t, output, "stellar now manages this path")
+
+		backupPath := filepath.Join(env.StellarDir, symlink.BackupAuthor(), "backup", "1.0.toml")
+		assert.True(t, env.FileExists(backupPath), "the dotfiles config's content should be backed up")
+		assert.Equal(t, dotfilesContent, env.ReadFile(backupPath))
+
+		// starship.toml is now stellar's own symlink into the cache.
+		assert.True(t, env.IsSymlink(env.StarshipPath))
+		expectedPath := filepath.Join(env.StellarDir, "local", "mytheme", "1.0.toml")
+		assert.Equal(t, expectedPath, env.ReadSymlink(env.StarshipPath))
+
+		// The dotfiles file itself is untouched - only starship.toml's link changed.
+		assert.Equal(t, dotfilesContent, env.ReadFile(dotfilesConfig))
+	})
+
+	t.Run("Stellar-managed symlink is not backed up", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		firstPath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+		require.NoError(t, os.Symlink(firstPath, env.StarshipPath))
+
+		env.CreateThemeFile("local", "mytheme", "1.0", testutil.SampleTOML())
+
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"apply", "local/mytheme@1.0"})
+			cmd.SetOut(new(bytes.Buffer))
+			require.NoError(t, cmd.Execute())
+		})
+
+		assert.NotContains(t, output, "backed up")
+		assert.NotContains(t, output, "was a symlink to")
+
+		backupDir := filepath.Join(env.StellarDir, symlink.BackupAuthor(), "backup")
+		assert.False(t, env.FileExists(backupDir))
+	})
+
+	// Regression: a foreign symlink (one stellar didn't create) whose TARGET
+	// happens to contain the same bytes as the last applied theme used to be
+	// silently adopted as "managed" via the hash/content signals, even
+	// though it's not the file stellar itself created - permanently losing
+	// the user's dotfiles wiring with no backup and no notice.
+	t.Run("Foreign symlink is backed up even when its content matches AppliedHash", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		env.CreateThemeFile("local", "mytheme", "1.0", testutil.SampleTOML())
+		require.NoError(t, NewRootCmdApply(t, env, "local/mytheme@1.0"))
+
+		// Now replace starship.toml with a FOREIGN symlink (outside stellar's
+		// home) whose target content is byte-identical to the theme that was
+		// just applied - AppliedHash/CurrentPath would match it exactly.
+		require.NoError(t, os.Remove(env.StarshipPath))
+		dotfilesDir := filepath.Join(env.RootDir, "dotfiles")
+		require.NoError(t, os.MkdirAll(dotfilesDir, 0755))
+		dotfilesConfig := filepath.Join(dotfilesDir, "starship.toml")
+		require.NoError(t, os.WriteFile(dotfilesConfig, []byte(testutil.SampleTOML()), 0644))
+		require.NoError(t, os.Symlink(dotfilesConfig, env.StarshipPath))
+
+		env.CreateThemeFile("local", "othertheme", "1.0", testutil.SampleTOMLWithCustom())
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"apply", "local/othertheme@1.0", "--force"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+
+		assert.Contains(t, output, "was a symlink to", "a foreign symlink must never be silently adopted, even if its content matches")
+		backupPath := filepath.Join(env.StellarDir, symlink.BackupAuthor(), "backup", "1.0.toml")
+		assert.True(t, env.FileExists(backupPath))
+		assert.Equal(t, testutil.SampleTOML(), env.ReadFile(backupPath))
+	})
+
+	// Regression: home-manager/stow-style tools restore the exact same
+	// foreign symlink on every activation. Without deduplication, every
+	// `stellar apply` after that would mint another backup version
+	// (2.0.toml, 3.0.toml, ...) for content that never actually changed.
+	t.Run("Re-applying with the same restored foreign symlink does not duplicate the backup", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		dotfilesDir := filepath.Join(env.RootDir, "dotfiles")
+		require.NoError(t, os.MkdirAll(dotfilesDir, 0755))
+		dotfilesConfig := filepath.Join(dotfilesDir, "starship.toml")
+		dotfilesContent := "# managed by a dotfiles tool\nformat = \"$all\"\n"
+		require.NoError(t, os.WriteFile(dotfilesConfig, []byte(dotfilesContent), 0644))
+		require.NoError(t, os.Symlink(dotfilesConfig, env.StarshipPath))
+
+		env.CreateThemeFile("local", "mytheme", "1.0", testutil.SampleTOML())
+
+		require.NoError(t, NewRootCmdApply(t, env, "local/mytheme@1.0"))
+
+		backupDir := filepath.Join(env.StellarDir, symlink.BackupAuthor(), "backup")
+		entriesAfterFirst, err := os.ReadDir(backupDir)
+		require.NoError(t, err)
+		require.Len(t, entriesAfterFirst, 1, "exactly one backup after the first foreign-symlink replacement")
+
+		// Simulate home-manager/stow restoring the identical symlink on its
+		// next activation, then applying again.
+		require.NoError(t, os.Remove(env.StarshipPath))
+		require.NoError(t, os.Symlink(dotfilesConfig, env.StarshipPath))
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"apply", "local/mytheme@1.0"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+
+		assert.Contains(t, output, "was a symlink to")
+		assert.Contains(t, output, "already backed up")
+
+		entriesAfterSecond, err := os.ReadDir(backupDir)
+		require.NoError(t, err)
+		assert.Len(t, entriesAfterSecond, 1, "content is unchanged, so no new backup version should be created")
+	})
+}
+
+// NewRootCmdApply is a small helper for tests that need to run a plain
+// `stellar apply <identifier>` without inspecting its output, just checking
+// the returned error.
+func NewRootCmdApply(t *testing.T, env *testutil.TestEnv, identifier string) error {
+	t.Helper()
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"apply", identifier})
+	cmd.SetOut(new(bytes.Buffer))
+	return cmd.Execute()
+}
+
+// =============================================================================
+// Security Warning Sharing Tests
+//
+// apply already warned about [custom] commands; preview and rollback's
+// re-download path used to skip that warning entirely, even though both run
+// starship against the theme's config exactly like apply does.
+// =============================================================================
+
+func TestE2E_SecurityWarningSharedAcrossCommands(t *testing.T) {
+	t.Run("Preview warns for a cached theme with custom commands", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		env.CreateThemeFile("testuser", "custom-theme", "1.0", testutil.SampleTOMLWithCustom())
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"preview", "testuser/custom-theme@1.0"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+
+		// Non-interactive stdin: the confirmation must fail fast (non-zero
+		// exit), not silently decline and exit 0.
+		assert.Error(t, execErr)
+		assert.Contains(t, output, "SECURITY WARNING")
+	})
+
+	t.Run("Preview --force skips the prompt", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		env.CreateThemeFile("testuser", "custom-theme", "1.0", testutil.SampleTOMLWithCustom())
+
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"preview", "testuser/custom-theme@1.0", "--force"})
+			cmd.SetOut(new(bytes.Buffer))
+			// Preview may still fail to actually spawn a terminal in this
+			// environment, but it must get past the security prompt.
+			_ = cmd.Execute()
+		})
+
+		assert.NotContains(t, output, "SECURITY WARNING")
+	})
+
+	t.Run("Rollback re-download path warns for custom commands", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+
+		currentPath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+		// previousPath deliberately does not exist on disk, forcing the
+		// re-download branch.
+		previousPath := filepath.Join(env.StellarDir, "testuser", "custom-theme", "1.0.toml")
+
+		config := `{
+  "current_theme": "alice/rainbow@1.0",
+  "current_path": "` + currentPath + `",
+  "previous_theme": "testuser/custom-theme@1.0",
+  "previous_path": "` + previousPath + `"
+}`
+		env.CreateConfig(config)
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"rollback"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+
+		assert.Error(t, execErr, "non-interactive stdin must fail fast, not silently roll back")
+		assert.Contains(t, output, "SECURITY WARNING")
+	})
+
+	t.Run("Rollback --force skips the prompt on re-download", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+
+		currentPath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+		previousPath := filepath.Join(env.StellarDir, "testuser", "custom-theme", "1.0.toml")
+
+		config := `{
+  "current_theme": "alice/rainbow@1.0",
+  "current_path": "` + currentPath + `",
+  "previous_theme": "testuser/custom-theme@1.0",
+  "previous_path": "` + previousPath + `"
+}`
+		env.CreateConfig(config)
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"rollback", "--force"})
+		cmd.SetOut(new(bytes.Buffer))
+		require.NoError(t, cmd.Execute())
+
+		assert.True(t, env.FileExists(previousPath))
+	})
+}
+
+// =============================================================================
+// SilenceUsage Tests
+// =============================================================================
+
+func TestE2E_SilenceUsage(t *testing.T) {
+	t.Run("Runtime error does not print usage", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		mockAPI := testutil.NewMockAPIHandler() // empty: theme genuinely doesn't exist
+		env.SetupMockAPI(mockAPI)
+
+		cmd := NewRootCmd()
+		buf := new(bytes.Buffer)
+		cmd.SetOut(buf)
+		cmd.SetErr(buf)
+		cmd.SetArgs([]string{"apply", "nobody/nothing@1.0"})
+
+		err := cmd.Execute()
+		assert.Error(t, err)
+		assert.NotContains(t, buf.String(), "Usage:", "a runtime error must not dump the usage block")
+	})
+
+	t.Run("Missing argument still prints usage", func(t *testing.T) {
+		_ = testutil.SetupTestEnv(t)
+		resetFlags()
+
+		cmd := NewRootCmd()
+		buf := new(bytes.Buffer)
+		cmd.SetOut(buf)
+		cmd.SetErr(buf)
+		cmd.SetArgs([]string{"apply"}) // missing required identifier
+
+		err := cmd.Execute()
+		assert.Error(t, err)
+		assert.Contains(t, buf.String(), "Usage:", "a genuine argument mistake should still show usage")
+	})
+
+	t.Run("Unknown flag still prints usage", func(t *testing.T) {
+		_ = testutil.SetupTestEnv(t)
+		resetFlags()
+
+		cmd := NewRootCmd()
+		buf := new(bytes.Buffer)
+		cmd.SetOut(buf)
+		cmd.SetErr(buf)
+		cmd.SetArgs([]string{"apply", "--no-such-flag", "a/b"})
+
+		err := cmd.Execute()
+		assert.Error(t, err)
+		assert.Contains(t, buf.String(), "Usage:")
+	})
+}
+
+// =============================================================================
+// Re-apply / Rollback-equivalence Tests
+//
+// apply used to set PreviousTheme = CurrentTheme even when the target WAS
+// already current, so "apply A, apply B, apply B, rollback" landed back on B
+// instead of A.
+// =============================================================================
+
+func TestE2E_ApplySameThemeAgain(t *testing.T) {
+	testutil.RequireSymlinks(t)
+	env := testutil.SetupTestEnv(t)
+	resetFlags()
+
+	env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+	env.CreateThemeFile("bob", "sunset", "2.0", testutil.SampleTOML())
+
+	cmd1 := NewRootCmd()
+	cmd1.SetArgs([]string{"apply", "alice/rainbow@1.0"})
+	cmd1.SetOut(new(bytes.Buffer))
+	require.NoError(t, cmd1.Execute())
+	resetFlags()
+
+	cmd2 := NewRootCmd()
+	cmd2.SetArgs([]string{"apply", "bob/sunset@2.0"})
+	cmd2.SetOut(new(bytes.Buffer))
+	require.NoError(t, cmd2.Execute())
+	resetFlags()
+
+	// Re-apply the theme that's already current.
+	var execErr error
+	output := testutil.CaptureOutput(t, func() {
+		cmd3 := NewRootCmd()
+		cmd3.SetArgs([]string{"apply", "bob/sunset@2.0"})
+		cmd3.SetOut(new(bytes.Buffer))
+		execErr = cmd3.Execute()
+	})
+	require.NoError(t, execErr)
+	assert.Contains(t, output, "Already applied")
+
+	cfg, err := config.Load()
+	require.NoError(t, err)
+	assert.Equal(t, "alice/rainbow@1.0", cfg.PreviousTheme, "Previous must not become the same as Current")
+
+	// rollback should now correctly land back on alice/rainbow, not bounce
+	// between bob/sunset and itself.
+	resetFlags()
+	cmd4 := NewRootCmd()
+	cmd4.SetArgs([]string{"rollback"})
+	cmd4.SetOut(new(bytes.Buffer))
+	require.NoError(t, cmd4.Execute())
+
+	cfg, err = config.Load()
+	require.NoError(t, err)
+	assert.Equal(t, "alice/rainbow@1.0", cfg.CurrentTheme)
+}
+
+func TestE2E_RollbackRefusesWhenPreviousEqualsCurrent(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+	resetFlags()
+
+	themePath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+	cfgJSON := `{
+  "current_theme": "alice/rainbow@1.0",
+  "current_path": "` + themePath + `",
+  "previous_theme": "alice/rainbow@1.0",
+  "previous_path": "` + themePath + `"
+}`
+	env.CreateConfig(cfgJSON)
+
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"rollback"})
+	cmd.SetOut(new(bytes.Buffer))
+
+	err := cmd.Execute()
+	assert.Error(t, err)
+}
+
+// =============================================================================
+// Cache/Local Theme Validation Tests
+//
+// Validation used to run only on the freshly-downloaded-content path, so
+// invalid TOML in an already-cached or hand-written local theme applied fine
+// and broke starship on every prompt render.
+// =============================================================================
+
+func TestE2E_ValidatesCachedTheme(t *testing.T) {
+	t.Run("Invalid local theme is refused by apply", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		env.CreateThemeFile("local", "broken", "1.0", testutil.InvalidTOML())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"apply", "local/broken@1.0"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid")
+		assert.False(t, env.FileExists(env.StarshipPath), "an invalid theme must never be applied")
+	})
+
+	t.Run("Invalid cached theme is refused by preview", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		env.CreateThemeFile("local", "broken", "1.0", testutil.InvalidTOML())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"preview", "local/broken@1.0"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid")
+	})
+}
+
+// =============================================================================
+// Error Clarity Tests
+// =============================================================================
+
+func TestE2E_ErrorClarity(t *testing.T) {
+	t.Run("Offline apply reports a friendly message", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+		deadURL := env.MockServer.URL
+		env.MockServer.Close() // now unreachable
+		t.Setenv(paths.EnvAPIURL, deadURL)
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"apply", "testuser/sample-theme@1.2"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "are you offline")
+	})
+
+	t.Run("404 theme reports a friendly message", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		mockAPI := testutil.NewMockAPIHandler()
+		env.SetupMockAPI(mockAPI)
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"apply", "nobody/nothing@1.0"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not found")
+	})
+
+	t.Run("Invalid identifier explains the format", func(t *testing.T) {
+		_, err := theme.ParseIdentifier("author/theme@1.2.3")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "X.Y")
+	})
+}
+
+// =============================================================================
+// Post-apply Environment Warning Tests
+// =============================================================================
+
+func TestE2E_ApplyPostApplyWarnings(t *testing.T) {
+	t.Run("Warns when starship is not on PATH", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		t.Setenv("PATH", "") // exec.LookPath("starship") must fail
+
+		env.CreateThemeFile("local", "mytheme", "1.0", testutil.SampleTOML())
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"apply", "local/mytheme@1.0"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+		assert.Contains(t, output, "was not found on your PATH")
+	})
+
+	t.Run("Warns when STARSHIP_CONFIG points elsewhere", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		otherConfig := filepath.Join(env.RootDir, "elsewhere.toml")
+		t.Setenv("STARSHIP_CONFIG", otherConfig)
+
+		env.CreateThemeFile("local", "mytheme", "1.0", testutil.SampleTOML())
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"apply", "local/mytheme@1.0"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+		assert.Contains(t, output, "$STARSHIP_CONFIG is set to")
+	})
+
+	t.Run("No STARSHIP_CONFIG warning when unset", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		env.CreateThemeFile("local", "mytheme", "1.0", testutil.SampleTOML())
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"apply", "local/mytheme@1.0"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+		assert.NotContains(t, output, "$STARSHIP_CONFIG is set to")
+	})
+
+	// Regression: warnPostApplyEnvironment used to compare $STARSHIP_CONFIG
+	// against the cached theme FILE (cfg.CurrentPath) instead of the managed
+	// starship.toml path (symlink.StarshipConfigPath()) - two different
+	// files even in symlink mode - so a correctly-set $STARSHIP_CONFIG
+	// pointing at the real starship.toml always warned.
+	t.Run("No warning when STARSHIP_CONFIG points at the managed starship.toml", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		// testutil pins EnvStarshipPath to env.StarshipPath, so this is
+		// exactly what symlink.StarshipConfigPath() resolves to.
+		t.Setenv("STARSHIP_CONFIG", env.StarshipPath)
+
+		env.CreateThemeFile("local", "mytheme", "1.0", testutil.SampleTOML())
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"apply", "local/mytheme@1.0"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+		assert.NotContains(t, output, "$STARSHIP_CONFIG is set to")
+	})
+}
+
+// =============================================================================
+// Preview Manual Fallback Test
+// =============================================================================
+
+func TestE2E_PreviewManualFallback(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+	resetFlags()
+	t.Setenv("PATH", "")
+	t.Setenv("TERMINAL", "")
+
+	env.CreateThemeFile("local", "mytheme", "1.0", testutil.SampleTOML())
+
+	var execErr error
+	output := testutil.CaptureOutput(t, func() {
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"preview", "local/mytheme@1.0"})
+		cmd.SetOut(new(bytes.Buffer))
+		execErr = cmd.Execute()
+	})
+
+	// No terminal can be found or started: preview must not error out, and
+	// must hand over the exact manual command instead of overclaiming success.
+	require.NoError(t, execErr)
+	assert.Contains(t, output, "Preview it manually by running")
+	assert.Contains(t, output, "STARSHIP_CONFIG=")
+	assert.NotContains(t, output, "Preview opened")
+}
+
+// =============================================================================
+// Update Availability Messaging Test
+// =============================================================================
+
+func TestE2E_ApplyUpdateAlreadyLatest(t *testing.T) {
+	testutil.RequireSymlinks(t)
+	env := testutil.SetupTestEnv(t)
+	resetFlags()
+
+	mockAPI := testutil.CreateDefaultMockAPI()
+	env.SetupMockAPI(mockAPI)
+
+	// Cache already holds the newest hub version (1.2) for testuser/sample-theme.
+	env.CreateThemeFile("testuser", "sample-theme", "1.2", testutil.SampleTOML())
+
+	var execErr error
+	output := testutil.CaptureOutput(t, func() {
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"apply", "--update", "testuser/sample-theme"})
+		cmd.SetOut(new(bytes.Buffer))
+		execErr = cmd.Execute()
+	})
+	require.NoError(t, execErr)
+	assert.Contains(t, output, "Already on the latest version")
+}
+
+// =============================================================================
+// Info @version / Offline Fallback Tests
+// =============================================================================
+
+func TestE2E_InfoVersionAndOffline(t *testing.T) {
+	t.Run("Accepts an explicit @version", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"info", "testuser/sample-theme@1.1"})
+		cmd.SetOut(new(bytes.Buffer))
+		require.NoError(t, cmd.Execute())
+	})
+
+	t.Run("Unknown explicit version errors with available versions", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"info", "testuser/sample-theme@9.9"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "1.2")
+	})
+
+	t.Run("Falls back to cached info when offline", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+		deadURL := env.MockServer.URL
+		env.MockServer.Close()
+		t.Setenv(paths.EnvAPIURL, deadURL)
+
+		env.CreateThemeFile("testuser", "sample-theme", "1.0", testutil.SampleTOML())
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"info", "testuser/sample-theme"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+		assert.Contains(t, output, "offline")
+	})
+
+	t.Run("Offline with no cache errors clearly", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+		deadURL := env.MockServer.URL
+		env.MockServer.Close()
+		t.Setenv(paths.EnvAPIURL, deadURL)
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"info", "testuser/sample-theme"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "offline")
+	})
+}
+
+// =============================================================================
+// Rollback / apply --force validation-skip and custom-command-prompt tests
+// =============================================================================
+
+// TestE2E_RollbackCachedCustomThemeNoPrompt verifies rollback no longer
+// prompts for [custom] commands when the previous theme is already cached on
+// disk - only a fresh re-download from the hub gets that prompt, matching
+// how apply treats an already-cached theme. This used to be gated on a
+// PreviousHash "changed since last applied" check, which has been removed
+// entirely.
+func TestE2E_RollbackCachedCustomThemeNoPrompt(t *testing.T) {
+	testutil.RequireSymlinks(t)
+	env := testutil.SetupTestEnv(t)
+	resetFlags()
+
+	currentPath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+	previousPath := env.CreateThemeFile("testuser", "custom-theme", "1.0", testutil.SampleTOMLWithCustom())
+
+	config := `{
+  "current_theme": "alice/rainbow@1.0",
+  "current_path": "` + currentPath + `",
+  "previous_theme": "testuser/custom-theme@1.0",
+  "previous_path": "` + previousPath + `"
+}`
+	env.CreateConfig(config)
+
+	var execErr error
+	output := testutil.CaptureOutput(t, func() {
+		cmd := NewRootCmd()
+		// Deliberately no --force and no stdin answer: if this prompted, a
+		// non-interactive stdin would fail fast and this would error.
+		cmd.SetArgs([]string{"rollback"})
+		cmd.SetOut(new(bytes.Buffer))
+		execErr = cmd.Execute()
+	})
+	require.NoError(t, execErr)
+	assert.NotContains(t, output, "SECURITY WARNING")
+	assert.Equal(t, previousPath, env.ReadSymlink(env.StarshipPath))
+}
+
+// TestE2E_ForceSkipsOnDiskValidation covers item 5: --force skips TOML
+// validation (with a printed warning) for a theme already on disk - local,
+// cached, or (for rollback) the previous theme - but never for freshly
+// downloaded content, which is always validated regardless of force.
+func TestE2E_ForceSkipsOnDiskValidation(t *testing.T) {
+	t.Run("apply refuses an invalid local theme without --force", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		env.CreateThemeFile("local", "broken", "1.0", testutil.InvalidTOML())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"apply", "local/broken@1.0"})
+		cmd.SetOut(new(bytes.Buffer))
+
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid")
+		assert.False(t, env.FileExists(env.StarshipPath))
+	})
+
+	t.Run("apply --force applies it anyway with a warning", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		themePath := env.CreateThemeFile("local", "broken", "1.0", testutil.InvalidTOML())
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"apply", "local/broken@1.0", "--force"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+		assert.Contains(t, strings.ToLower(output), "skipping validation")
+		assert.Equal(t, themePath, env.ReadSymlink(env.StarshipPath))
+	})
+
+	t.Run("rollback refuses an invalid cached previous theme without --force", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		currentPath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+		previousPath := env.CreateThemeFile("local", "broken", "1.0", testutil.InvalidTOML())
+		env.CreateConfig(`{
+  "current_theme": "alice/rainbow@1.0",
+  "current_path": "` + currentPath + `",
+  "previous_theme": "local/broken@1.0",
+  "previous_path": "` + previousPath + `"
+}`)
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"rollback"})
+		cmd.SetOut(new(bytes.Buffer))
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid")
+	})
+
+	t.Run("rollback --force restores it anyway with a warning", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		currentPath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+		previousPath := env.CreateThemeFile("local", "broken", "1.0", testutil.InvalidTOML())
+		env.CreateConfig(`{
+  "current_theme": "alice/rainbow@1.0",
+  "current_path": "` + currentPath + `",
+  "previous_theme": "local/broken@1.0",
+  "previous_path": "` + previousPath + `"
+}`)
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"rollback", "--force"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+		assert.Contains(t, strings.ToLower(output), "skipping validation")
+		assert.Equal(t, previousPath, env.ReadSymlink(env.StarshipPath))
+	})
+
+	t.Run("preview --force previews an invalid cached theme with a warning", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		env.CreateThemeFile("local", "broken", "1.0", testutil.InvalidTOML())
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"preview", "local/broken@1.0", "--force"})
+			cmd.SetOut(new(bytes.Buffer))
+			// May still fail to spawn a terminal in this environment; the
+			// point is it gets past validation.
+			execErr = cmd.Execute()
+		})
+		_ = execErr
+		assert.Contains(t, strings.ToLower(output), "skipping validation")
+	})
+}
+
+// =============================================================================
+// Confirmation stdin handling (cmd/confirm.go promptConfirmation)
+// =============================================================================
+
+// replaceStdinEOF swaps os.Stdin for the read end of a closed pipe: an
+// *os.File at immediate EOF with nothing ever written to it, and not a
+// terminal - what `stellar apply ... </dev/null` or a fully detached CI
+// stdin looks like. The returned func restores the original os.Stdin.
+func replaceStdinEOF(t *testing.T) func() {
+	t.Helper()
+
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	orig := os.Stdin
+	os.Stdin = r
+
+	return func() {
+		os.Stdin = orig
+		_ = r.Close()
+	}
+}
+
+func TestE2E_ConfirmationStdinHandling(t *testing.T) {
+	t.Run("piped y answers the prompt and proceeds", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+
+		restoreStdin := replaceStdin(t, "y\n")
+		defer restoreStdin()
+
+		var execErr error
+		output := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"apply", "testuser/custom-theme@1.0"})
+			cmd.SetOut(new(bytes.Buffer))
+			execErr = cmd.Execute()
+		})
+		require.NoError(t, execErr)
+		assert.Contains(t, output, "Applied")
+		assert.True(t, env.FileExists(filepath.Join(env.StellarDir, "testuser", "custom-theme", "1.0.toml")))
+	})
+
+	t.Run("piped n declines and aborts non-zero", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+
+		restoreStdin := replaceStdin(t, "n\n")
+		defer restoreStdin()
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"apply", "testuser/custom-theme@1.0"})
+		cmd.SetOut(new(bytes.Buffer))
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not applied")
+		assert.False(t, env.FileExists(filepath.Join(env.StellarDir, "testuser", "custom-theme", "1.0.toml")))
+	})
+
+	t.Run("EOF with no input and a non-terminal stdin fails with the --force hint", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+
+		restoreStdin := replaceStdinEOF(t)
+		defer restoreStdin()
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"apply", "testuser/custom-theme@1.0"})
+		cmd.SetOut(new(bytes.Buffer))
+		err := cmd.Execute()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no answer on stdin")
+		assert.Contains(t, err.Error(), "--force")
+	})
+}
+
+// =============================================================================
+// Info local-only (404) fallback
+// =============================================================================
+
+// TestE2E_InfoLocalOnlyFallback covers the nit: a theme that's cached
+// locally but 404s on the hub (deleted, renamed, or always local-only) must
+// fall back to the local copy exactly like the offline case, rather than
+// refusing outright.
+func TestE2E_InfoLocalOnlyFallback(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+	mockAPI := testutil.NewMockAPIHandler() // empty: every theme 404s
+	env.SetupMockAPI(mockAPI)
+
+	env.CreateThemeFile("local", "onlyhere", "1.0", testutil.SampleTOML())
+
+	var execErr error
+	output := testutil.CaptureOutput(t, func() {
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"info", "local/onlyhere"})
+		cmd.SetOut(new(bytes.Buffer))
+		execErr = cmd.Execute()
+	})
+	require.NoError(t, execErr)
+	assert.Contains(t, output, "not on stellar-hub")
+}
+
+// =============================================================================
+// NoArgs commands / usage-vs-error ordering
+// =============================================================================
+
+// TestE2E_NoArgsCommandsRejectArgs covers the argsWithUsage(cobra.NoArgs)
+// additions: rollback, clean, current, list and update take no positional
+// arguments, so an unexpected one must be refused with usage shown, not
+// silently ignored.
+func TestE2E_NoArgsCommandsRejectArgs(t *testing.T) {
+	for _, name := range []string{"rollback", "clean", "current", "list", "update"} {
+		t.Run(name, func(t *testing.T) {
+			_ = testutil.SetupTestEnv(t)
+			resetFlags()
+
+			cmd := NewRootCmd()
+			buf := new(bytes.Buffer)
+			cmd.SetOut(buf)
+			cmd.SetErr(buf)
+			cmd.SetArgs([]string{name, "unexpected-arg"})
+
+			err := cmd.Execute()
+			assert.Error(t, err)
+			assert.Contains(t, buf.String(), "Usage:", "args: %v", name)
+		})
+	}
+}
+
+// TestE2E_ErrorPrintedBeforeUsage covers the args.go/root.go nit: for a
+// genuine usage mistake, cobra's "Error: ..." line must appear BEFORE the
+// usage block, the order cobra always used before SilenceUsage was
+// introduced on root - not after it, which argsWithUsage's original
+// cmd.Usage() workaround produced.
+func TestE2E_ErrorPrintedBeforeUsage(t *testing.T) {
+	_ = testutil.SetupTestEnv(t)
+	resetFlags()
+
+	cmd := NewRootCmd()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"apply"}) // missing required identifier
+
+	err := cmd.Execute()
+	require.Error(t, err)
+
+	out := buf.String()
+	errIdx := strings.Index(out, "Error:")
+	usageIdx := strings.Index(out, "Usage:")
+	require.NotEqual(t, -1, errIdx, "expected an Error: line")
+	require.NotEqual(t, -1, usageIdx, "expected a Usage: block")
+	assert.Less(t, errIdx, usageIdx, "Error: must be printed before Usage:")
+}
+
+// =============================================================================
+// Preview --terminal not found on PATH
+// =============================================================================
+
+// TestE2E_PreviewTerminalNotFoundWarning covers item 6: an explicit
+// --terminal that isn't on PATH must be called out with a warning instead of
+// silently falling back with no explanation. Linux-only: spawnLinuxTerminal
+// (where this warning lives) only runs on GOOS=="linux".
+func TestE2E_PreviewTerminalNotFoundWarning(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("--terminal handling only applies to spawnLinuxTerminal")
+	}
+
+	env := testutil.SetupTestEnv(t)
+	resetFlags()
+	t.Setenv("TERMINAL", "")
+
+	env.CreateThemeFile("local", "mytheme", "1.0", testutil.SampleTOML())
+
+	var execErr error
+	output := testutil.CaptureOutput(t, func() {
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"preview", "local/mytheme@1.0", "--terminal", "no-such-terminal-xyz"})
+		cmd.SetOut(new(bytes.Buffer))
+		execErr = cmd.Execute()
+	})
+	require.NoError(t, execErr)
+	assert.Contains(t, output, "no-such-terminal-xyz")
+	assert.Contains(t, output, "not found on PATH")
 }

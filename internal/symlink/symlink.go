@@ -236,6 +236,83 @@ type BackupInfo struct {
 	// author/version values used to construct Path (rather than re-derived
 	// from Path later), so it always matches where the backup actually lives.
 	Identifier string
+	// ForeignSymlinkTarget is set when the backed-up config was a symlink
+	// pointing OUTSIDE stellar's home (e.g. a dotfiles-manager-managed
+	// ~/.config/starship.toml, such as stow/chezmoi/home-manager). Callers use
+	// it to tell the user exactly what was replaced, since "your original
+	// config was backed up" alone would be misleading - the original wasn't a
+	// plain file, and the symlink itself (their dotfiles wiring) is gone,
+	// repointed at stellar's cache. Empty for a backed-up regular file or a
+	// symlink stellar already owned.
+	ForeignSymlinkTarget string
+	// AlreadyBackedUp is true when Path/Identifier point at a PRE-EXISTING
+	// backup - the content about to be backed up is byte-identical to the
+	// newest backup already on disk for this user - rather than one just
+	// created by this call. Home-manager/stow-style tools restore the exact
+	// same foreign symlink on every activation, which would otherwise mint a
+	// new 2.0, 3.0, ... backup every single run for content that never
+	// changed. Callers still need to notify the user something was replaced
+	// (see printBackupNotice), just without claiming a fresh backup was made.
+	AlreadyBackedUp bool
+}
+
+// resolveSymlinkTarget returns the absolute, cleaned target of the symlink at
+// path, or "" if path is not a symlink or its target can't be read.
+func resolveSymlinkTarget(path string) string {
+	target, err := os.Readlink(path)
+	if err != nil {
+		return ""
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(path), target)
+	}
+	return filepath.Clean(target)
+}
+
+// IsWithinDir reports whether target lies inside dir, checked both as given
+// and (if it differs) after resolving symlinks on both sides - so a target
+// that is itself reached through another symlink into dir is still counted as
+// "within". Exported so cmd/uninstall.go's own symlink-into-cache check can
+// share this instead of re-implementing path containment.
+func IsWithinDir(target, dir string) bool {
+	dir = filepath.Clean(dir)
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	resolvedTarget := target
+	if r, err := filepath.EvalSymlinks(target); err == nil {
+		resolvedTarget = r
+	}
+	within := func(p string) bool {
+		return p == dir || strings.HasPrefix(p, dir+string(filepath.Separator))
+	}
+	return within(target) || within(resolvedTarget)
+}
+
+// isManagedSymlink reports whether configPath is a symlink whose target lies
+// inside stellar's home directory - i.e. one stellar itself created via
+// ApplyTheme, as opposed to a symlink the user (or a dotfiles manager like
+// stow/chezmoi/home-manager) put there pointing somewhere else entirely.
+//
+// This used to be "is configPath a symlink at all", which treated a foreign
+// symlink as already-managed and silently repointed it with no backup,
+// permanently losing the user's dotfiles wiring. Scoping the check to
+// stellar's own home means a foreign symlink now falls through to the
+// unmanaged path below, where its target's content is backed up exactly like
+// any other unmanaged config.
+func isManagedSymlink(configPath string) bool {
+	if !isSymlink(configPath) {
+		return false
+	}
+	target := resolveSymlinkTarget(configPath)
+	if target == "" {
+		return false
+	}
+	home, err := paths.StellarHome()
+	if err != nil {
+		return false
+	}
+	return IsWithinDir(target, home)
 }
 
 // IsManaged reports whether the file at configPath is one stellar itself
@@ -246,7 +323,9 @@ type BackupInfo struct {
 // *confirms* management, so a false negative just means an unmanaged file is
 // (harmlessly) backed up rather than data being lost — it fails safe toward
 // preserving the file:
-//   - configPath is a symlink (symlink mode's own marker), or
+//   - configPath is a symlink resolving into stellar's own home (symlink
+//     mode's own marker - but only ONE stellar created, see isManagedSymlink),
+//     or
 //   - cfg.AppliedHash is set and matches configPath's current content, or
 //   - cfg.CurrentTheme is set and configPath's content matches the cached
 //     theme file byte-for-byte (legacy fallback for configs saved before
@@ -254,12 +333,25 @@ type BackupInfo struct {
 //
 // cfg may be nil, treated the same as an empty config (i.e. no known state, so
 // nothing is recognized as managed).
+//
+// A symlink is special-cased: if configPath is a symlink at all, whether it's
+// managed is decided ENTIRELY by isManagedSymlink (does it point into
+// stellar's home), and the hash/content signals below are never consulted.
+// Without this, a foreign symlink (e.g. one a dotfiles manager like
+// stow/chezmoi/home-manager put there) whose target happens to contain the
+// same bytes as the last applied theme - a common case, since tools like
+// home-manager restore that exact symlink on every activation - was silently
+// adopted as "managed" via the hash/content checks, even though it is not
+// the file stellar itself created. That skipped the backup entirely,
+// permanently losing track of the user's dotfiles wiring.
 func IsManaged(configPath string, cfg *config.Config) bool {
 	if cfg == nil {
 		cfg = &config.Config{}
 	}
-	return isSymlink(configPath) ||
-		(cfg.AppliedHash != "" && hashOf(configPath) == cfg.AppliedHash) ||
+	if isSymlink(configPath) {
+		return isManagedSymlink(configPath)
+	}
+	return (cfg.AppliedHash != "" && hashOf(configPath) == cfg.AppliedHash) ||
 		(cfg.CurrentTheme != "" && filesEqual(configPath, cfg.CurrentPath))
 }
 
@@ -284,12 +376,45 @@ func backupOriginalConfig(configPath string, cfg *config.Config) (info *BackupIn
 		return nil, nil
 	}
 
+	// Having passed IsManaged above, a symlink here is necessarily a foreign
+	// one (isManagedSymlink already ruled out one pointing into stellar's
+	// home). Remember what it pointed to so the caller can tell the user
+	// exactly what was replaced. copyFile below reads configPath through
+	// os.Open, which follows symlinks transparently, so the backup correctly
+	// captures the target's actual content rather than the link itself.
+	foreignSymlinkTarget := ""
+	if isSymlink(configPath) {
+		foreignSymlinkTarget = resolveSymlinkTarget(configPath)
+	}
+
 	author := BackupAuthor()
 
 	// Construct backup directory: ~/.config/stellar/<author>/backup
 	backupDir, err := paths.ThemeCacheDir(author, theme.BackupThemeName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve backup directory: %w", err)
+	}
+
+	// If the content about to be backed up is byte-identical to the newest
+	// backup already on disk, there's nothing new to preserve - skip minting
+	// another version. Without this, a foreign symlink managed by
+	// home-manager/stow (which restores the exact same symlink on every
+	// activation) would mint a fresh 2.0, 3.0, ... backup on every single
+	// `stellar apply`, even though the content never actually changed. The
+	// caller still gets a *BackupInfo (with AlreadyBackedUp set) so it can
+	// tell the user what was replaced and where it's already backed up.
+	if latestVer, verr := theme.FindLatestLocalVersion(backupDir); verr == nil {
+		if latestPath, perr := paths.ThemeCachePath(author, theme.BackupThemeName, latestVer); perr == nil {
+			if filesEqual(configPath, latestPath) {
+				identifier := (&theme.Theme{Author: author, Name: theme.BackupThemeName, Version: latestVer}).String()
+				return &BackupInfo{
+					Path:                 latestPath,
+					Identifier:           identifier,
+					ForeignSymlinkTarget: foreignSymlinkTarget,
+					AlreadyBackedUp:      true,
+				}, nil
+			}
+		}
 	}
 
 	// Pick the first free version slot so an existing backup is never
@@ -333,7 +458,7 @@ func backupOriginalConfig(configPath string, cfg *config.Config) (info *BackupIn
 	// re-deriving it later by parsing backupPath.
 	identifier := (&theme.Theme{Author: author, Name: theme.BackupThemeName, Version: version}).String()
 
-	return &BackupInfo{Path: backupPath, Identifier: identifier}, nil
+	return &BackupInfo{Path: backupPath, Identifier: identifier, ForeignSymlinkTarget: foreignSymlinkTarget}, nil
 }
 
 // ApplyTheme points ~/.config/starship.toml at the target theme file.

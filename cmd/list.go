@@ -10,9 +10,11 @@ import (
 )
 
 var listCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List all cached themes",
-	Long:  `Display all themes that have been downloaded and cached locally.`,
+	Use:     "list",
+	Short:   "List all cached themes",
+	Long:    `Display all themes that have been downloaded and cached locally.`,
+	Example: `  stellar list`,
+	Args:    argsWithUsage(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Get current theme
 		cfg, err := config.Load()

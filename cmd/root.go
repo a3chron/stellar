@@ -18,6 +18,13 @@ func NewRootCmd() *cobra.Command {
 		Use:   "stellar",
 		Short: "Starship theme manager",
 		Long:  `Stellar - Discover, preview, and apply Starship themes from the community`,
+		// A runtime error (offline, theme not found, declined confirmation,
+		// ...) has nothing to do with how the command was invoked, so dumping
+		// the whole usage block after it is just noise. Genuine
+		// argument/flag misuse still gets usage - see argsWithUsage (Args
+		// validators) and SetFlagErrorFunc below, which both print it
+		// explicitly despite this being set.
+		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			// Shell completion runs this on every keystroke, so it must not
 			// touch the filesystem - and must not fail: an error here prints
@@ -51,6 +58,18 @@ func NewRootCmd() *cobra.Command {
 		// Custom version template (will be set by SetVersionInfo)
 		Version: "dev",
 	}
+
+	// Flag-parsing errors (unknown flag, bad value, ...) are always a usage
+	// mistake, never a runtime failure, so they always get the usage block
+	// printed regardless of SilenceUsage above - see argsWithUsage for why
+	// this flips root's SilenceUsage off instead of calling c.Usage()
+	// directly (that would print usage before cobra's own "Error: ..."
+	// line, not after it). SetFlagErrorFunc is inherited by every
+	// subcommand that doesn't set its own.
+	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
+		c.Root().SilenceUsage = false
+		return err
+	})
 
 	// Add subcommands
 	cmd.AddCommand(applyCmd)

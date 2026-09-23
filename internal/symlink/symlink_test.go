@@ -363,6 +363,29 @@ func TestIsManaged(t *testing.T) {
 		cfg := &config.Config{CurrentTheme: "alice/rainbow@1.0", CurrentPath: themePath, AppliedHash: "deadbeef"}
 		assert.False(t, IsManaged(env.StarshipPath, cfg))
 	})
+
+	// Regression: a foreign symlink (pointing outside stellar's home) whose
+	// TARGET content happens to match AppliedHash, or the legacy
+	// CurrentPath-content signal, used to be adopted as "managed" via those
+	// hash/content checks even though isManagedSymlink correctly says it
+	// isn't stellar's own symlink. That silently skipped the backup and lost
+	// the user's dotfiles wiring. A symlink's management status must be
+	// decided ENTIRELY by isManagedSymlink; the hash/content checks are for
+	// regular files only.
+	t.Run("foreign symlink matching AppliedHash by content is still unmanaged", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
+		require.NoError(t, os.Remove(env.StarshipPath))
+
+		foreignTarget := filepath.Join(env.RootDir, "dotfiles-target.toml")
+		require.NoError(t, os.WriteFile(foreignTarget, []byte(testutil.SampleTOML()), 0644))
+		require.NoError(t, os.Symlink(foreignTarget, env.StarshipPath))
+
+		hash, err := HashFile(foreignTarget)
+		require.NoError(t, err)
+
+		cfg := &config.Config{AppliedHash: hash, CurrentTheme: "alice/rainbow@1.0", CurrentPath: themePath}
+		assert.False(t, IsManaged(env.StarshipPath, cfg), "a foreign symlink must never be adopted via hash/content matching")
+	})
 }
 
 func TestSanitizeBackupAuthor(t *testing.T) {

@@ -44,6 +44,32 @@ func TestLoad_ExistingFile(t *testing.T) {
 	assert.Equal(t, []string{"alice/rainbow", "bob/sunset"}, cfg.DownloadedThemes)
 }
 
+// TestLoad_UnknownFieldFromOlderBuild covers the PreviousHash removal
+// (rollback no longer prompts for [custom] commands on a cached previous
+// theme, so the hash it used to gate that on is gone entirely - see
+// cmd/rollback.go). A config.json written by an older stellar build can
+// still have a "previous_hash" key on disk; loading it must not error, and
+// every other field must still come through correctly.
+func TestLoad_UnknownFieldFromOlderBuild(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+
+	configData := `{
+  "current_theme": "alice/rainbow@1.0",
+  "current_path": "/path/to/theme.toml",
+  "previous_theme": "bob/sunset@2.0",
+  "previous_path": "/path/to/previous.toml",
+  "previous_hash": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+}`
+	env.CreateConfig(configData)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, "alice/rainbow@1.0", cfg.CurrentTheme)
+	assert.Equal(t, "bob/sunset@2.0", cfg.PreviousTheme)
+	assert.Equal(t, "/path/to/previous.toml", cfg.PreviousPath)
+}
+
 func TestLoad_InvalidJSON(t *testing.T) {
 	env := testutil.SetupTestEnv(t)
 

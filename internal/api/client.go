@@ -3,8 +3,10 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -13,6 +15,56 @@ import (
 )
 
 const BaseURL = "https://stellar.a3chron.dev"
+
+// ErrOffline wraps a request that never reached stellar-hub at all (DNS
+// failure, connection refused, timeout) - as opposed to the hub answering
+// with a normal HTTP error status. Callers use errors.Is(err, ErrOffline) to
+// show a "can't reach stellar-hub (are you offline?)" message instead of a
+// raw "dial tcp ..." error.
+var ErrOffline = errors.New("stellar-hub unreachable")
+
+// ErrNotFound wraps a 404 response from stellar-hub: the requested theme or
+// version genuinely does not exist under that identifier, as opposed to the
+// hub being unreachable. Callers use errors.Is(err, ErrNotFound) to show a
+// "no theme <author>/<slug> on stellar-hub" message.
+var ErrNotFound = errors.New("not found on stellar-hub")
+
+// looksOffline reports whether err indicates the request never actually
+// reached a server: a DNS failure, a dial (connection-refused/unreachable)
+// failure, or a timeout. These are the cases where "are you offline?" is a
+// fair guess. Other transport failures wrapped in the same *url.Error - a TLS
+// handshake/certificate error, a malformed URL - reach a server (or at least
+// prove the network path works) and are misleading to blame on connectivity,
+// so they're deliberately excluded here.
+func looksOffline(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	return false
+}
+
+// wrapTransportError turns a raw http.Client error into either ErrOffline
+// (genuine connection failure - see looksOffline) or a plain "couldn't talk
+// to stellar-hub" error, so callers only ever need errors.Is(err,
+// ErrOffline) to decide which message to show, without themselves worrying
+// about what kind of failure produced it. errors.As on the returned error
+// still finds the original *url.Error (or whatever err was), since both
+// branches wrap it with %w.
+func wrapTransportError(err error) error {
+	if looksOffline(err) {
+		return fmt.Errorf("%w: %w", ErrOffline, err)
+	}
+	return fmt.Errorf("couldn't talk to stellar-hub: %w", err)
+}
 
 type Client struct {
 	baseURL    string
@@ -173,14 +225,14 @@ func (c *Client) FetchThemeConfig(author, name, version string) (string, error) 
 
 	resp, err := c.httpClient.Get(url)
 	if err != nil {
-		return "", fmt.Errorf("failed to fetch theme: %w", err)
+		return "", wrapTransportError(err)
 	}
 	defer func() {
 		_ = resp.Body.Close()
 	}()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return "", fmt.Errorf("theme version not found")
+		return "", fmt.Errorf("%w: %s/%s@%s", ErrNotFound, author, name, version)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("server returned %d", resp.StatusCode)
@@ -199,12 +251,15 @@ func (c *Client) GetThemeInfo(author, name string) (*ThemeInfo, error) {
 
 	resp, err := c.httpClient.Get(url)
 	if err != nil {
-		return nil, err
+		return nil, wrapTransportError(err)
 	}
 	defer func() {
 		_ = resp.Body.Close()
 	}()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("%w: %s/%s", ErrNotFound, author, name)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("theme not found (status: %d)", resp.StatusCode)
 	}

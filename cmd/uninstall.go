@@ -40,7 +40,10 @@ stellar binary itself are removed.
 
 Use --keep-config to keep ~/.config/stellar (themes, backups, config) and
 remove only the binary.`,
-	Args: cobra.NoArgs,
+	Example: `  stellar uninstall
+  stellar uninstall --yes
+  stellar uninstall --keep-config`,
+	Args: argsWithUsage(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		execPath, err := executablePath()
 		if err != nil {
@@ -129,24 +132,33 @@ remove only the binary.`,
 	},
 }
 
-// confirmUninstall reads a yes/no answer from in. When in is a file that is
-// not a terminal (stdin as a pipe, CI, a script), there is nobody to answer,
-// so the command refuses rather than hanging or guessing.
+// confirmUninstall reads a yes/no answer from in, following the same rule as
+// cmd/confirm.go's promptConfirmation: it always prints the prompt and tries
+// to read a line first, rather than refusing outright just because in isn't a
+// terminal (a piped `echo y | stellar uninstall` has a real answer to give,
+// even though it fails an isTerminal check). Only an EOF with nothing at all
+// read, on a genuinely non-interactive in (a *os.File that isn't a terminal -
+// stdin as a pipe, CI, a script, `</dev/null`), is refused: there's nobody
+// there to answer, so the caller is told to pass --yes instead.
 func confirmUninstall(in io.Reader) (bool, error) {
-	if f, ok := in.(*os.File); ok {
-		info, err := f.Stat()
-		if err != nil || info.Mode()&os.ModeCharDevice == 0 {
-			return false, fmt.Errorf("stdin is not a terminal; re-run with --yes to uninstall non-interactively")
-		}
-	}
-
 	fmt.Print("Continue? [y/N] ")
 	line, err := bufio.NewReader(in).ReadString('\n')
 	if err != nil && err != io.EOF {
 		return false, err
 	}
+
 	answer := strings.ToLower(strings.TrimSpace(line))
-	return answer == "y" || answer == "yes", nil
+	if answer == "y" || answer == "yes" {
+		return true, nil
+	}
+
+	if err == io.EOF && answer == "" && !isTerminal(in) {
+		if _, ok := in.(*os.File); ok {
+			return false, fmt.Errorf("no answer on stdin; re-run with --yes to uninstall non-interactively")
+		}
+	}
+
+	return false, nil
 }
 
 // managedSymlinkTarget returns the file starshipPath links to when it is a
@@ -168,19 +180,7 @@ func managedSymlinkTarget(starshipPath, stellarHome string) string {
 	}
 	target = filepath.Clean(target)
 
-	home := filepath.Clean(stellarHome)
-	if resolved, err := filepath.EvalSymlinks(home); err == nil {
-		home = resolved
-	}
-	resolvedTarget := target
-	if r, err := filepath.EvalSymlinks(target); err == nil {
-		resolvedTarget = r
-	}
-
-	within := func(p string) bool {
-		return p == home || strings.HasPrefix(p, home+string(filepath.Separator))
-	}
-	if within(target) || within(resolvedTarget) {
+	if symlink.IsWithinDir(target, stellarHome) {
 		return target
 	}
 	return ""

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -122,9 +123,65 @@ func platformBinaryName() string {
 	return name
 }
 
+// detectUnmanagedInstall returns a non-empty message when execPath cannot be
+// self-updated: it lives under the Nix store (an immutable path managed by
+// Nix/nixpkgs, never meant to be written to directly), or its directory isn't
+// writable by this user for some other reason (e.g. a package-manager-owned
+// system directory). Checking this before any network activity means a
+// package-manager install fails fast with a clear message instead of
+// downloading the whole release first and only then hitting a raw CreateTemp
+// permission error.
+func detectUnmanagedInstall(execPath string) string {
+	if strings.HasPrefix(execPath, "/nix/store/") {
+		return "stellar was installed via Nix. Update it through Nix instead " +
+			"(e.g. `nix profile upgrade`, or bump the flake input / nixpkgs " +
+			"revision you pinned) - see the README's install section - " +
+			"`stellar update` cannot write to the Nix store."
+	}
+
+	dir := filepath.Dir(execPath)
+	if !isDirWritable(dir) {
+		return fmt.Sprintf(
+			"%s is not writable by your user, so stellar can't update itself in place. "+
+				"Update it via the package manager you installed it with, or re-run the install script.",
+			dir,
+		)
+	}
+
+	return ""
+}
+
+// isDirWritable reports whether dir can be written to, by creating and
+// immediately removing a throwaway probe file in it - the same operation
+// os.CreateTemp performs during the actual update, done ahead of time so a
+// permission problem is caught with a friendly message before any network
+// activity, instead of after a wasted download.
+//
+// The probe file is removed via a deferred close-then-remove so it's cleaned
+// up on every return path (including a Close failure), and a Close error is
+// itself treated as "not writable" - a probe file this process can't even
+// close cleanly is not a filesystem stellar's actual update should trust.
+func isDirWritable(dir string) (writable bool) {
+	f, err := os.CreateTemp(dir, ".stellar-write-test-*")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	defer func() {
+		_ = os.Remove(name)
+	}()
+
+	if cerr := f.Close(); cerr != nil {
+		return false
+	}
+	return true
+}
+
 var updateCmd = &cobra.Command{
-	Use:   "update",
-	Short: "Update stellar CLI to the latest version",
+	Use:     "update",
+	Short:   "Update stellar CLI to the latest version",
+	Example: `  stellar update`,
+	Args:    argsWithUsage(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		color.Yellow("Checking for updates...")
 
@@ -137,6 +194,22 @@ var updateCmd = &cobra.Command{
 		if !updateAvailable {
 			color.Green("You're already on the latest version (%s)", latestVersion)
 			return nil
+		}
+
+		// Resolve the running binary's path up front so the downloaded file
+		// can be written next to it, and so an install this command can't
+		// actually update (Nix, or any directory this user can't write to)
+		// is caught BEFORE downloading the whole release, not after, via a
+		// raw CreateTemp permission error.
+		execPath, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		if resolved, rerr := filepath.EvalSymlinks(execPath); rerr == nil {
+			execPath = resolved
+		}
+		if msg := detectUnmanagedInstall(execPath); msg != "" {
+			return errors.New(msg)
 		}
 
 		color.Yellow("Updating to version %s...", latestVersion)
@@ -173,13 +246,9 @@ var updateCmd = &cobra.Command{
 			return fmt.Errorf("download failed (status: %d)", resp.StatusCode)
 		}
 
-		// Resolve the running binary's path up front so the downloaded file can be
-		// written next to it. Keeping them on the same volume means the final
-		// rename works on all OSes (system temp may be on a different volume).
-		execPath, err := os.Executable()
-		if err != nil {
-			return err
-		}
+		// execPath was already resolved above (before the download); kept on
+		// the same volume as this download so the final rename works on all
+		// OSes (system temp may be on a different volume).
 
 		// Write to a temporary file in the same directory as the current binary
 		tmpFile, err := os.CreateTemp(filepath.Dir(execPath), updateTempPrefix+"*")
