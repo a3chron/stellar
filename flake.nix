@@ -21,6 +21,11 @@
       {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
+            # nix develop drops into this bash; the default stdenv one has no
+            # readline, which breaks interactive prompts (literal \[ \] from
+            # starship) and completion (`shopt: progcomp: invalid shell option`).
+            bashInteractive
+
             go
 
             # Go development tools
@@ -34,6 +39,9 @@
           ];
 
           shellHook = ''
+            # stdenv points SHELL at its readline-less bash; anything spawning
+            # $SHELL (e.g. `stellar preview`) should get the interactive one.
+            export SHELL="${pkgs.bashInteractive}/bin/bash"
             export GOPATH="$HOME/go"
             export PATH="$GOPATH/bin:$PATH"
             export GOPROXY="https://proxy.golang.org,direct"
