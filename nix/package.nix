@@ -14,13 +14,13 @@
 
 buildGoModule (finalAttrs: {
   pname = "stellar";
-  version = "1.5.0";
+  version = "1.6.0";
 
   src = fetchFromGitHub {
     owner = "a3chron";
     repo = "stellar";
     tag = "v${finalAttrs.version}";
-    hash = "sha256-G4tRMr2jr/igOka4YDpTXUg6DcDIoCqZHOq76OZfyZw=";
+    hash = "sha256-IxmTBLnAo3qmMIY2kzbWSG8W82RWDXmDM2T3jL3WohE=";
   };
 
   vendorHash = "sha256-CKoFZc7S5za0jZ/LA0abZ7AA/Q7+MtdW9NZznCEzap0=";
@@ -40,7 +40,7 @@ buildGoModule (finalAttrs: {
     "-s"
     "-w"
     "-X main.version=${finalAttrs.version}"
-    "-X main.commit=494a0054f86092c7c5648fa5480f500207632469"
+    "-X main.commit=44257ae46ff2a80e528d99aee9ecd408dbd8cf10"
   ];
 
   nativeBuildInputs = [ installShellFiles ];
