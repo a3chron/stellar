@@ -381,8 +381,7 @@ nix develop --command ./scripts/release.sh 1.5.0
 The script tags the release, pushes the tag (which is what triggers goreleaser),
 then updates `nix/package.nix` to match and pushes that.
 
-Those last three values - `version`, the source `hash` and the stamped commit -
-have to move together, and cannot be collapsed into a single edit: the hash is a
+Those two values - `version` and the source `hash` - have to move together, and cannot be collapsed into a single edit: the hash is a
 content hash of the *tagged* tarball, so it does not exist until the tag is
 pushed. That fixed ordering is the whole reason the script exists. It refuses to
 run on a dirty tree, off `main`, out of sync with origin, or when the tag
@@ -460,7 +459,7 @@ When adding new CLI features, please add corresponding E2E tests in `cmd/e2e_tes
   - Interactive prompts for version notes, dependencies, etc.
 - [ ] Add progress bars for downloads
 - [ ] **Get stellar into nixpkgs**: the flake is nixified - `nix build` and `nix run` produce a
-  real binary with version/commit ldflags and installed bash/zsh/fish completions, and
+  real binary with version ldflags and installed bash/zsh/fish completions, and
   `nix/package.nix` is a release build pinned to a tag, ready to be copied into nixpkgs as
   `pkgs/by-name/st/stellar/package.nix`. Remaining for the PR: add a maintainer entry to
   `maintainers/maintainer-list.nix` and fill in `meta.maintainers`.

@@ -32,15 +32,14 @@ buildGoModule (finalAttrs: {
   # `date` is deliberately left at its "unknown" default: a build timestamp
   # would make the output differ between rebuilds of identical sources.
   #
-  # The commit is pinned as a literal SHA rather than taken from
-  # `finalAttrs.src.rev`, which for a `tag` fetch is the ref ("refs/tags/v1.4.0")
-  # and renders as the nonsense "commit: refs/tag" once the CLI truncates it to
-  # eight characters. Bump it together with `version`.
+  # No -X main.commit either, so `stellar version` shows "commit: none".
+  # `finalAttrs.src.rev` is the tag ref, not a SHA, so the commit would have
+  # to be a literal - and nixpkgs' update bot only bumps `version` and the
+  # hashes, so a pinned SHA would silently go stale on the first automated bump.
   ldflags = [
     "-s"
     "-w"
     "-X main.version=${finalAttrs.version}"
-    "-X main.commit=44257ae46ff2a80e528d99aee9ecd408dbd8cf10"
   ];
 
   nativeBuildInputs = [ installShellFiles ];
