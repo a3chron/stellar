@@ -61,7 +61,7 @@
 
           src = ./.;
 
-          vendorHash = "sha256-CKoFZc7S5za0jZ/LA0abZ7AA/Q7+MtdW9NZznCEzap0=";
+          vendorHash = "sha256-fHvoSeRUqDVrKkk7q4wmRTdUXR2JsZRYh9ddHGEmOHs=";
 
           # Deliberately no -X main.version: this builds whatever is checked
           # out, which is not a release. Stamping a release version here would

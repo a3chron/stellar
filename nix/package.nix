@@ -23,7 +23,7 @@ buildGoModule (finalAttrs: {
     hash = "sha256-IxmTBLnAo3qmMIY2kzbWSG8W82RWDXmDM2T3jL3WohE=";
   };
 
-  vendorHash = "sha256-CKoFZc7S5za0jZ/LA0abZ7AA/Q7+MtdW9NZznCEzap0=";
+  vendorHash = "sha256-fHvoSeRUqDVrKkk7q4wmRTdUXR2JsZRYh9ddHGEmOHs=";
 
   # Mirrors the ldflags in .goreleaser.yaml so `stellar version` reports the
   # real version rather than "dev" - which also matters behaviourally, since
