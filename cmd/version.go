@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -205,7 +206,51 @@ func IsUpdateAvailable() (bool, string, error) {
 	latestVersion := strings.TrimPrefix(release.TagName, "v")
 	currentVersion := strings.TrimPrefix(versionInfo.version, "v")
 
-	return latestVersion != currentVersion, release.TagName, nil
+	return isNewerRelease(latestVersion, currentVersion), release.TagName, nil
+}
+
+// isNewerRelease reports whether latest is a strictly higher release than
+// current, comparing major.minor.patch numerically ("1.10.0" > "1.9.0").
+// A plain inequality called any difference an update - so a build ahead of
+// GitHub's latest release (a fresh tag goreleaser hasn't published yet, or a
+// Nix package that got there first) was told to "update" back down to it.
+// Anything unparsable falls back to that old inequality rather than
+// silently hiding a real update.
+func isNewerRelease(latest, current string) bool {
+	l, lok := releaseParts(latest)
+	c, cok := releaseParts(current)
+	if !lok || !cok {
+		return latest != current
+	}
+	for i := range l {
+		if l[i] != c[i] {
+			return l[i] > c[i]
+		}
+	}
+	return false
+}
+
+// releaseParts parses "1.6.0" (optionally "v1.6.0", or with a "-rc1" style
+// suffix, which is ignored) into its three numeric parts; missing parts
+// count as 0.
+func releaseParts(v string) ([3]int, bool) {
+	var parts [3]int
+	v = strings.TrimPrefix(v, "v")
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		v = v[:i]
+	}
+	fields := strings.Split(v, ".")
+	if len(fields) == 0 || len(fields) > 3 {
+		return parts, false
+	}
+	for i, f := range fields {
+		n, err := strconv.Atoi(f)
+		if err != nil || n < 0 {
+			return parts, false
+		}
+		parts[i] = n
+	}
+	return parts, true
 }
 
 func checkForUpdates() string {
