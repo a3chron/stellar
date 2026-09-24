@@ -12,7 +12,6 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/a3chron/stellar/internal/api"
 	"github.com/a3chron/stellar/internal/cache"
@@ -106,7 +105,7 @@ func versionNotFoundError(cmdName string, t *theme.Theme, available []string) er
 
 	hints := []hint{{
 		label:  "Available versions",
-		values: []string{strings.Join(sorted, ", ")},
+		items:  sorted,
 		suffix: fmt.Sprintf("(latest: %s)", latest),
 	}}
 

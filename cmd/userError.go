@@ -31,8 +31,11 @@ import (
 // which run against a real terminal) see exactly the uncoloured text.
 var (
 	errPrefixColor = color.New(color.FgRed, color.Bold)
-	hintLabelColor = color.New(color.FgYellow)
+	// Labels stay quiet so the eye goes to the error and to what can be
+	// acted on: a suggestion is bold cyan, a list of options plain cyan.
+	hintLabelColor = color.New(color.FgHiBlack)
 	hintValueColor = color.New(color.FgCyan, color.Bold)
+	hintItemColor  = color.New(color.FgCyan)
 	hintDimColor   = color.New(color.FgHiBlack)
 )
 
@@ -48,6 +51,10 @@ var (
 type hint struct {
 	label  string
 	values []string
+	// items is an inline, comma-separated list ("1.0, 1.1") - options to
+	// choose from rather than one suggestion, so each is highlighted more
+	// softly than a value. Used instead of values.
+	items  []string
 	suffix string
 }
 
@@ -56,6 +63,13 @@ type hint struct {
 // hintedError.Error() uses, so today's plain-text error strings never
 // change.
 func (h hint) legacyText() string {
+	if len(h.items) > 0 {
+		line := h.label + ": " + strings.Join(h.items, ", ")
+		if h.suffix != "" {
+			line += " " + h.suffix
+		}
+		return line
+	}
 	switch len(h.values) {
 	case 0:
 		return h.label + ":"
@@ -76,10 +90,21 @@ func (h hint) legacyText() string {
 }
 
 // render renders h the way it's actually shown to the user: indented two
-// spaces under the error line, the label in the dim/yellow hint colour,
-// each value in bold cyan, and any suffix dimmed.
+// spaces under the error line, the label dimmed, a list of options in
+// plain cyan, a single suggestion in bold cyan, and any suffix dimmed.
 func (h hint) render() string {
 	label := hintLabelColor.Sprintf("%s:", h.label)
+	if len(h.items) > 0 {
+		coloured := make([]string, len(h.items))
+		for i, item := range h.items {
+			coloured[i] = hintItemColor.Sprint(item)
+		}
+		line := "  " + label + " " + strings.Join(coloured, ", ")
+		if h.suffix != "" {
+			line += " " + hintDimColor.Sprint(h.suffix)
+		}
+		return line
+	}
 	switch len(h.values) {
 	case 0:
 		return "  " + label
