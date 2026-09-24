@@ -445,7 +445,7 @@ When adding new CLI features, please add corresponding E2E tests in `cmd/e2e_tes
 - [x] Add tests
 - [x] **Windows support**: apply themes by copying instead of symlinking (`STELLAR_APPLY_MODE`), Windows release binary, PowerShell installer, and `stellar update`
 
-- [ ] **Preview: fix bash formatting**
+- [x] **Preview: fix bash formatting**: the literal `\[ \]` and `shopt: progcomp` errors came from `nix develop` dropping into the readline-less stdenv bash; the dev shell now uses `bashInteractive`, and `stellar preview --shell bash` opens a normal bash
 - [ ] **`stellar preview` on Windows**: `cmd/preview.go` only spawns terminals on macOS/Linux. On Windows (and anywhere else no terminal could be opened) it now prints the exact command to preview manually instead of erroring, but still doesn't open a window itself - needs a Windows Terminal / PowerShell branch that opens a shell with `STARSHIP_CONFIG` set.
 - [ ] **Windows packaging**: consider scoop/winget packaging (leftover `stellar.exe.old` from self-update is already cleaned up on the next run).
 - [x] **CI test job**: `go vet` and `go test` (with `-race` on Linux) run on every pull request and again before goreleaser, on both `ubuntu-latest` and `windows-latest`, so a tag can't publish a failing build and the copy path is guarded natively.
