@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/a3chron/stellar/internal/api"
+	"github.com/a3chron/stellar/internal/auth"
 	"github.com/a3chron/stellar/internal/config"
 	"github.com/a3chron/stellar/internal/paths"
 	"github.com/a3chron/stellar/internal/symlink"
@@ -111,6 +113,13 @@ remove only the binary.`,
 		}
 
 		if !uninstallKeepConfig {
+			// Best-effort: revoke the stellar-hub login before the directory
+			// holding credentials.json is gone. Failures (offline, no login,
+			// an older hub without this route) are not fatal - the directory
+			// removal below is what actually matters, and a token left valid
+			// on the hub can still be revoked later from settings.
+			revokeStoredToken()
+
 			if err := os.RemoveAll(stellarHome); err != nil {
 				return fmt.Errorf("failed to remove %s: %w", stellarHome, err)
 			}
@@ -130,6 +139,22 @@ remove only the binary.`,
 		}
 		return nil
 	},
+}
+
+// revokeStoredToken best-effort revokes the stellar-hub login stored for the
+// current STELLAR_API_URL, if any. Uninstalling removes credentials.json
+// along with the rest of stellar home either way, so this is purely about
+// not leaving a still-valid token sitting in the hub's database - any
+// failure here (offline, nothing stored, an older hub) is deliberately
+// silent, matching the fact that the directory removal is about to happen
+// regardless.
+func revokeStoredToken() {
+	baseURL := paths.APIURL(api.BaseURL)
+	token, err := auth.Token(baseURL)
+	if err != nil || token == "" {
+		return
+	}
+	_ = api.NewAuthedClient(token).RevokeToken()
 }
 
 // confirmUninstall reads a yes/no answer from in, following the same rule as
