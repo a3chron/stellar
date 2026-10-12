@@ -26,6 +26,9 @@ const (
 	// EnvDoNotTrack is the cross-tool convention (consoledonottrack.com); a
 	// value of "1" disables the report the same way EnvNoTelemetry does.
 	EnvDoNotTrack = "DO_NOT_TRACK"
+	// EnvToken overrides the stored CLI auth token for the current base URL
+	// (see internal/auth), so CI can authenticate without a credentials.json.
+	EnvToken = "STELLAR_TOKEN"
 )
 
 // StellarHome returns the stellar configuration directory.
@@ -83,6 +86,16 @@ func ConfigPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(stellarHome, "config.json"), nil
+}
+
+// CredentialsPath returns the path to credentials.json within the stellar
+// home directory - see internal/auth for the format and how it's written.
+func CredentialsPath() (string, error) {
+	stellarHome, err := StellarHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(stellarHome, "credentials.json"), nil
 }
 
 // ThemeCachePath returns the cache path for a theme version

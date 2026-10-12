@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/a3chron/stellar/internal/api"
 	"github.com/spf13/cobra"
 )
 
@@ -59,6 +60,9 @@ func SetVersionInfo(version, commit, date string) {
 	versionInfo.date = date
 	// Also set the version for the root command to enable --version flag
 	rootCmd.Version = version
+	// internal/api can't import cmd (that would be a cycle), so it exposes
+	// its own Version var for the User-Agent header instead.
+	api.Version = version
 	rootCmd.SetVersionTemplate("{{stellarVersionOutput}}")
 }
 
