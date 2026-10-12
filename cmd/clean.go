@@ -37,7 +37,7 @@ var cleanCmd = &cobra.Command{
 		beforeCount := len(themesBefore)
 
 		// Clean cache (always remove empty directories since we track downloads in config)
-		err = cache.CleanCache(excludeCurrentPath)
+		err = cache.CleanCache(excludeCurrentPath, cfg.AuthoredThemes)
 		if err != nil {
 			return fmt.Errorf("failed to clean cache: %w", err)
 		}

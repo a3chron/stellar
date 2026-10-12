@@ -93,10 +93,18 @@ func ListCachedThemes() ([]string, error) {
 	return themes, nil
 }
 
-func CleanCache(excludeCurrentPath string) error {
+// CleanCache removes every cached theme except excludeCurrentPath (when
+// set), skipping <author>/backup and any "author/name" listed in
+// authoredThemes - see the comments below for why each is protected.
+func CleanCache(excludeCurrentPath string, authoredThemes []string) error {
 	themes, err := ListCachedThemes()
 	if err != nil {
 		return err
+	}
+
+	authored := make(map[string]bool, len(authoredThemes))
+	for _, id := range authoredThemes {
+		authored[id] = true
 	}
 
 	// Track directories to potentially remove
@@ -121,6 +129,15 @@ func CleanCache(excludeCurrentPath string) error {
 		// in excludeCurrentPath). Backups are still removable explicitly via
 		// `stellar remove <author>/backup[@version]`.
 		if t.Name == theme.BackupThemeName {
+			continue
+		}
+
+		// Themes created locally via `stellar new`/`stellar fork`
+		// (config.Config.AuthoredThemes) are work in progress with no hub
+		// copy to re-download from - clean must never silently delete the
+		// only copy of a theme someone is actively authoring, the same
+		// reasoning that protects backups above.
+		if authored[fmt.Sprintf("%s/%s", t.Author, t.Name)] {
 			continue
 		}
 
