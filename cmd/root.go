@@ -88,6 +88,10 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(removeCmd)
 	cmd.AddCommand(updateCmd)
 	cmd.AddCommand(uninstallCmd)
+	cmd.AddCommand(authCmd)
+	cmd.AddCommand(newCmd)
+	cmd.AddCommand(forkCmd)
+	cmd.AddCommand(publishCmd)
 
 	return cmd
 }

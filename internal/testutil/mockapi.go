@@ -56,15 +56,59 @@ type MockAPIHandler struct {
 	pings          []MockPing            // Install reports received, in order
 	pingStatus     int                   // Status to answer pings with; 0 means 204
 	reportDelay    time.Duration         // Hold "report" pings this long before recording them
+
+	// legacyHub, when true, makes every CLI auth/drafts route fall through to
+	// the old author/slug/version parsing below instead of being handled at
+	// all - exactly what happens against a real stellar-hub deployment from
+	// before CLI publishing existed (the CLI shipped ahead of the hub, or the
+	// hub was rolled back behind it). See SetLegacyHub.
+	legacyHub bool
+
+	// --- CLI auth state ---
+	deviceRequests   map[string]*mockDeviceRequest // key: deviceCode
+	userCodeToDevice map[string]string             // key: userCode
+	nextAuthOutcome  *mockAuthOutcome              // consumed by the next StartDeviceAuth call
+	tokens           map[string]string             // key: bearer token -> username
+	users            map[string]mockUserInfo       // key: username
+	deviceSeq        int
+
+	// --- Drafts state ---
+	drafts   map[string]*mockDraft // key: code (uppercase)
+	draftSeq int
+}
+
+// mockUserInfo is the minimal user identity CLI auth/drafts care about.
+type mockUserInfo struct {
+	name  string
+	image *string
 }
 
 // NewMockAPIHandler creates a new mock API handler
 func NewMockAPIHandler() *MockAPIHandler {
 	return &MockAPIHandler{
-		themes:         make(map[string]*MockTheme),
-		DownloadCounts: make(map[string]int),
-		RequestCounts:  make(map[string]int),
+		themes:           make(map[string]*MockTheme),
+		DownloadCounts:   make(map[string]int),
+		RequestCounts:    make(map[string]int),
+		deviceRequests:   make(map[string]*mockDeviceRequest),
+		userCodeToDevice: make(map[string]string),
+		tokens:           make(map[string]string),
+		users:            make(map[string]mockUserInfo),
+		drafts:           make(map[string]*mockDraft),
 	}
+}
+
+// SetLegacyHub makes the mock behave like a stellar-hub deployment from
+// before CLI publishing existed: every new route (cli/auth/*, drafts/**)
+// falls through unhandled to the old author/slug/version parsing, which
+// naturally 404s on nonsense paths like "cli/auth" or "drafts/<code>" with a
+// plain-text (non-JSON) body - exactly the shape a pre-upgrade hub would
+// produce, since it has no such routes at all. Tests use this to verify
+// stellar reports "stellar-hub doesn't support CLI publishing yet" instead
+// of a misleading "Unauthorized"/"run stellar auth".
+func (h *MockAPIHandler) SetLegacyHub(legacy bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.legacyHub = legacy
 }
 
 // AddTheme adds a theme to the mock API
@@ -97,6 +141,25 @@ func (h *MockAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if len(parts) == 2 && parts[0] == "cli" && parts[1] == "ping" {
 		h.handleCLIPing(w, r)
 		return
+	}
+
+	// CLI auth and drafts routes must also come before the author/slug
+	// parsing below - /api/drafts/K7QF2M would otherwise parse as author
+	// "drafts", slug "K7QF2M" and 404. SetLegacyHub(true) skips this block
+	// entirely so these paths fall through to that same author/slug parsing,
+	// reproducing a pre-upgrade hub that has no such routes at all.
+	h.mu.Lock()
+	legacy := h.legacyHub
+	h.mu.Unlock()
+	if !legacy {
+		if len(parts) >= 2 && parts[0] == "cli" && parts[1] == "auth" {
+			h.handleCLIAuth(w, r, parts[2:])
+			return
+		}
+		if parts[0] == "drafts" {
+			h.handleDrafts(w, r, parts[1:])
+			return
+		}
 	}
 
 	if len(parts) < 2 {

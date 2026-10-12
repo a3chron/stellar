@@ -1886,6 +1886,20 @@ func resetFlags() {
 	previewForce = false
 	previewShell = ""
 	previewTerminal = ""
+	authNoBrowser = false
+	publishSlug = ""
+	publishName = ""
+	publishDescription = ""
+	publishGroup = ""
+	publishColorMode = ""
+	publishDeps = nil
+	publishMinStarship = ""
+	publishScreenshot = ""
+	publishVersion = ""
+	publishNotes = ""
+	publishDraftCode = ""
+	publishDoPublish = false
+	publishYes = false
 }
 
 // pinVersion sets versionInfo to a known non-dev version (IsDev() gates
