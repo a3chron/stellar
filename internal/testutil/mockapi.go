@@ -27,11 +27,12 @@ type MockTheme struct {
 
 // MockVersion represents a theme version
 type MockVersion struct {
-	Version       string
-	ConfigContent string // The actual TOML content
-	VersionNotes  string
-	Dependencies  []string
-	CreatedAt     string
+	Version            string
+	ConfigContent      string // The actual TOML content
+	VersionNotes       string
+	Dependencies       []string
+	MinStarshipVersion string
+	CreatedAt          string
 }
 
 // MockPing mirrors the body the CLI posts to /api/cli/ping. It is declared
@@ -65,12 +66,13 @@ type MockAPIHandler struct {
 	legacyHub bool
 
 	// --- CLI auth state ---
-	deviceRequests   map[string]*mockDeviceRequest // key: deviceCode
-	userCodeToDevice map[string]string             // key: userCode
-	nextAuthOutcome  *mockAuthOutcome              // consumed by the next StartDeviceAuth call
-	tokens           map[string]string             // key: bearer token -> username
-	users            map[string]mockUserInfo       // key: username
-	deviceSeq        int
+	deviceRequests        map[string]*mockDeviceRequest // key: deviceCode
+	userCodeToDevice      map[string]string             // key: userCode
+	nextAuthOutcome       *mockAuthOutcome              // consumed by the next StartDeviceAuth call
+	tokens                map[string]string             // key: bearer token -> username
+	users                 map[string]mockUserInfo       // key: username
+	deviceSeq             int
+	authTokenForcedErrors int // see SetNextAuthServerErrors
 
 	// --- Drafts state ---
 	drafts   map[string]*mockDraft // key: code (uppercase)
@@ -111,12 +113,19 @@ func (h *MockAPIHandler) SetLegacyHub(legacy bool) {
 	h.legacyHub = legacy
 }
 
+// themeKey builds the map key h.themes is stored under, lowercased so theme
+// lookups are username-case-insensitive - matching the real hub, where
+// usernames are compared case-insensitively.
+func themeKey(author, slug string) string {
+	return strings.ToLower(author) + "/" + strings.ToLower(slug)
+}
+
 // AddTheme adds a theme to the mock API
 func (h *MockAPIHandler) AddTheme(theme MockTheme) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	key := theme.Author + "/" + theme.Slug
+	key := themeKey(theme.Author, theme.Slug)
 	h.themes[key] = &theme
 	h.DownloadCounts[key] = theme.Downloads
 }
@@ -169,7 +178,7 @@ func (h *MockAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	author := parts[0]
 	slug := parts[1]
-	key := author + "/" + slug
+	key := themeKey(author, slug)
 
 	// Snapshot the theme under the mutex: handleIncrementDownload writes
 	// theme.Downloads concurrently, so handlers must not read the shared
@@ -207,6 +216,14 @@ func (h *MockAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // handleGetTheme returns theme info
 func (h *MockAPIHandler) handleGetTheme(w http.ResponseWriter, theme *MockTheme) {
+	// GET /api/{author}/{slug} returns versions sorted numerically, newest
+	// first - matching the hub - regardless of the order they were stored
+	// or published in.
+	sorted := append([]MockVersion(nil), theme.Versions...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return compareMockVersions(sorted[i].Version, sorted[j].Version) > 0
+	})
+
 	response := map[string]interface{}{
 		"id":          theme.ID,
 		"slug":        theme.Slug,
@@ -223,7 +240,7 @@ func (h *MockAPIHandler) handleGetTheme(w http.ResponseWriter, theme *MockTheme)
 			"image": nil,
 			"bio":   nil,
 		},
-		"versions": h.formatVersions(theme.Versions),
+		"versions": h.formatVersions(sorted),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -251,9 +268,10 @@ func (h *MockAPIHandler) handleVersionRequest(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Handle "latest" version
+	// Handle "latest" version - the numeric maximum, not whichever entry
+	// happens to be stored first.
 	if version == "latest" && len(theme.Versions) > 0 {
-		version = theme.Versions[0].Version
+		version = maxMockVersion(theme.Versions).Version
 	}
 
 	// Find the version
@@ -366,7 +384,7 @@ func (h *MockAPIHandler) handleSearchThemes(w http.ResponseWriter, r *http.Reque
 			"updatedAt":     t.UpdatedAt,
 		}
 		if len(t.Versions) > 0 {
-			theme["latestVersion"] = t.Versions[0].Version
+			theme["latestVersion"] = maxMockVersion(t.Versions).Version
 		}
 		themesJSON[i] = theme
 	}
@@ -469,7 +487,7 @@ func (h *MockAPIHandler) SetPingStatus(code int) {
 func (h *MockAPIHandler) GetDownloadCount(author, slug string) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.DownloadCounts[author+"/"+slug]
+	return h.DownloadCounts[themeKey(author, slug)]
 }
 
 // Requests returns how many requests the handler has received for path

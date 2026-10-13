@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -70,12 +71,68 @@ type createDraftBody struct {
 	Description        *string   `json:"description"`
 	Group              *string   `json:"group"`
 	ColorMode          *string   `json:"colorMode"`
+	ColorSchemeID      *string   `json:"colorSchemeId"`
 	Dependencies       *[]string `json:"dependencies"`
 	MinStarshipVersion *string   `json:"minStarshipVersion"`
 	Version            *string   `json:"version"`
 	VersionNotes       *string   `json:"versionNotes"`
 	Config             *string   `json:"config"`
 	Source             *string   `json:"source"`
+}
+
+var (
+	mockMinStarshipFieldRe = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+	mockVersionFieldRe     = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)$`)
+)
+
+// validateMockDraftFields mirrors the hub's own field-limit validation
+// (zod schemas) closely enough that a test exercising these limits behaves
+// the same way against the mock as it would against production - so a test
+// that passes here can't pass only because the mock is more lenient than
+// the real thing.
+func validateMockDraftFields(body createDraftBody) (code, msg string, ok bool) {
+	if body.ColorMode != nil {
+		switch *body.ColorMode {
+		case "dark", "light", "both":
+		default:
+			return "validation_failed", "colorMode must be dark, light, or both", false
+		}
+	}
+	if body.MinStarshipVersion != nil && *body.MinStarshipVersion != "" && !mockMinStarshipFieldRe.MatchString(*body.MinStarshipVersion) {
+		return "validation_failed", "minStarshipVersion must look like X.Y.Z", false
+	}
+	if body.Version != nil && *body.Version != "" && !mockVersionFieldRe.MatchString(*body.Version) {
+		return "validation_failed", "version must look like X.Y", false
+	}
+	if body.Name != nil {
+		n := len(*body.Name)
+		if n < 1 || n > 100 {
+			return "validation_failed", "name must be 1-100 characters", false
+		}
+	}
+	if body.Description != nil && len(*body.Description) > 500 {
+		return "validation_failed", "description must be at most 500 characters", false
+	}
+	if body.VersionNotes != nil && len(*body.VersionNotes) > 500 {
+		return "validation_failed", "versionNotes must be at most 500 characters", false
+	}
+	if body.Group != nil && len(*body.Group) > 100 {
+		return "validation_failed", "group must be at most 100 characters", false
+	}
+	if body.Dependencies != nil {
+		if len(*body.Dependencies) > 20 {
+			return "validation_failed", "dependencies must have at most 20 items", false
+		}
+		for _, dep := range *body.Dependencies {
+			if len(dep) > 100 {
+				return "validation_failed", "each dependency must be at most 100 characters", false
+			}
+		}
+	}
+	if body.Source != nil && len(*body.Source) > 200 {
+		return "validation_failed", "source must be at most 200 characters", false
+	}
+	return "", "", true
 }
 
 func validateMockConfig(content string) (bool, string) {
@@ -101,6 +158,29 @@ func derefStrOr(p *string, fallback string) string {
 		return fallback
 	}
 	return *p
+}
+
+// isBlank reports whether p is nil or holds only whitespace - the hub's own
+// rule for "this field counts as missing" (a config that's present but
+// entirely whitespace is treated exactly like no config at all).
+func isBlank(p *string) bool {
+	return p == nil || strings.TrimSpace(*p) == ""
+}
+
+// maxMockVersion returns the MockVersion with the numeric-maximum Version
+// string in versions (a zero MockVersion if versions is empty). "Latest" is
+// defined as the numeric maximum everywhere in the mock, matching the hub -
+// never whichever entry happens to be stored or listed first.
+func maxMockVersion(versions []MockVersion) MockVersion {
+	var best MockVersion
+	found := false
+	for _, v := range versions {
+		if !found || compareMockVersions(v.Version, best.Version) > 0 {
+			best = v
+			found = true
+		}
+	}
+	return best
 }
 
 // normalizeConfigForCompare mirrors the contract's own comparison rule for
@@ -172,13 +252,20 @@ func parseMockVersion(v string) (major, minor int, ok bool) {
 	return maj, m, true
 }
 
+// missingFields reports which required fields a draft is still missing. A
+// config that's present but entirely whitespace counts as missing, for
+// either kind: a version draft inherits a real config from "latest" by
+// default, but once bearer-written to blank, "config" shows up here too
+// (see isBlank) - matching the hub's own behavior, not just "version is
+// the only thing a version draft can be missing" as an earlier, simpler
+// version of this mock assumed.
 func (h *MockAPIHandler) missingFields(d *mockDraft) []string {
 	if d.kind == "theme" {
 		var m []string
-		if d.name == nil || *d.name == "" {
+		if isBlank(d.name) {
 			m = append(m, "name")
 		}
-		if d.config == nil || *d.config == "" {
+		if isBlank(d.config) {
 			m = append(m, "config")
 		}
 		if d.screenshotURL == nil {
@@ -187,15 +274,33 @@ func (h *MockAPIHandler) missingFields(d *mockDraft) []string {
 		return m
 	}
 	var m []string
-	if d.version == nil || *d.version == "" {
+	if isBlank(d.config) {
+		m = append(m, "config")
+	}
+	if isBlank(d.version) {
 		m = append(m, "version")
 	}
 	return m
 }
 
+// draftStatus implements the hub's current status rule: a THEME draft is
+// waiting_for_config only while it has no configSource at all (it never has
+// one of "latest" - that's a version-draft-only concept). A VERSION draft is
+// waiting_for_config only when its config is null outright; once it has
+// configSource "latest" (the default, inherited from the published theme)
+// it's a real, usable config, so status falls through to incomplete/ready
+// based on missingFields instead - a blank-but-present config shows up
+// there (missing: ["config"]), not as "waiting".
 func (h *MockAPIHandler) draftStatus(d *mockDraft) string {
-	if d.configSource == nil || *d.configSource == "latest" {
-		return "waiting_for_config"
+	switch d.kind {
+	case "theme":
+		if d.configSource == nil {
+			return "waiting_for_config"
+		}
+	default:
+		if d.config == nil {
+			return "waiting_for_config"
+		}
 	}
 	if len(h.missingFields(d)) > 0 {
 		return "incomplete"
@@ -203,20 +308,20 @@ func (h *MockAPIHandler) draftStatus(d *mockDraft) string {
 	return "ready"
 }
 
-// unchangedFromLatest compares config and dependencies against the theme's
-// latest published version. minStarshipVersion is deliberately not compared
-// - MockTheme/MockVersion (shared with every other mock test in this
-// package) has no field for it - which is a known simplification of the
-// mock, not of the contract.
+// unchangedFromLatest compares config, dependencies and minStarshipVersion
+// against the theme's latest (numeric maximum) published version.
 func (h *MockAPIHandler) unchangedFromLatest(d *mockDraft, th *MockTheme) bool {
 	if len(th.Versions) == 0 || d.config == nil {
 		return false
 	}
-	latest := th.Versions[0]
+	latest := maxMockVersion(th.Versions)
 	if normalizeConfigForCompare(*d.config) != normalizeConfigForCompare(latest.ConfigContent) {
 		return false
 	}
-	return stringSlicesEqual(d.dependencies, latest.Dependencies)
+	if !stringSlicesEqual(d.dependencies, latest.Dependencies) {
+		return false
+	}
+	return derefStr(d.minStarshipVersion) == latest.MinStarshipVersion
 }
 
 // draftShape builds the JSON shape for d exactly matching internal/api.Draft's
@@ -265,10 +370,10 @@ func (h *MockAPIHandler) draftShape(d *mockDraft, includeConfig bool) map[string
 		shape["config"] = *d.config
 	}
 	if d.kind == "version" {
-		if th, ok := h.themes[d.owner+"/"+d.themeSlug]; ok {
+		if th, ok := h.themes[themeKey(d.owner, d.themeSlug)]; ok {
 			latest := ""
 			if len(th.Versions) > 0 {
-				latest = th.Versions[0].Version
+				latest = maxMockVersion(th.Versions).Version
 			}
 			shape["theme"] = map[string]interface{}{
 				"slug": d.themeSlug, "name": th.Name, "latestVersion": latest,
@@ -351,10 +456,26 @@ func (h *MockAPIHandler) handleListDrafts(w http.ResponseWriter, username string
 	writeJSON(w, http.StatusOK, map[string]interface{}{"drafts": shapes})
 }
 
+// liveDraftCount returns how many live drafts username currently owns - the
+// caller must hold h.mu.
+func (h *MockAPIHandler) liveDraftCount(username string) int {
+	n := 0
+	for _, d := range h.drafts {
+		if d.owner == username {
+			n++
+		}
+	}
+	return n
+}
+
 func (h *MockAPIHandler) handleCreateDraft(w http.ResponseWriter, r *http.Request, username string) {
 	var body createDraftBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "validation_failed", "invalid JSON body", nil, nil)
+		return
+	}
+	if code, msg, ok := validateMockDraftFields(body); !ok {
+		writeJSONError(w, http.StatusBadRequest, code, msg, nil, nil)
 		return
 	}
 	if body.Config != nil && *body.Config != "" {
@@ -367,17 +488,6 @@ func (h *MockAPIHandler) handleCreateDraft(w http.ResponseWriter, r *http.Reques
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	live := 0
-	for _, d := range h.drafts {
-		if d.owner == username {
-			live++
-		}
-	}
-	if live >= 10 {
-		writeJSONError(w, http.StatusConflict, "too_many_drafts", "you already have 10 live drafts", nil, nil)
-		return
-	}
-
 	now := time.Now().UTC()
 
 	switch body.Kind {
@@ -387,7 +497,7 @@ func (h *MockAPIHandler) handleCreateDraft(w http.ResponseWriter, r *http.Reques
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", "slug is required", nil, nil)
 			return
 		}
-		if _, exists := h.themes[username+"/"+slug]; exists {
+		if _, exists := h.themes[themeKey(username, slug)]; exists {
 			writeJSONError(w, http.StatusConflict, "duplicate_slug", "you already have a published theme with that slug", nil, nil)
 			return
 		}
@@ -397,6 +507,14 @@ func (h *MockAPIHandler) handleCreateDraft(w http.ResponseWriter, r *http.Reques
 				return
 			}
 		}
+		// too_many_drafts is checked only after the business-rule checks
+		// above (draft_exists/duplicate_slug) and below (theme_not_found) -
+		// those are more specific, so they take priority when both would
+		// otherwise apply.
+		if h.liveDraftCount(username) >= 10 {
+			writeJSONError(w, http.StatusConflict, "too_many_drafts", "you already have 10 live drafts", nil, nil)
+			return
+		}
 
 		code := h.nextDraftCode()
 		d := &mockDraft{code: code, kind: "theme", owner: username, slug: &slug, createdAt: now, updatedAt: now, dependencies: []string{}}
@@ -404,6 +522,7 @@ func (h *MockAPIHandler) handleCreateDraft(w http.ResponseWriter, r *http.Reques
 		d.description = body.Description
 		d.group = body.Group
 		d.colorMode = body.ColorMode
+		d.colorSchemeID = body.ColorSchemeID
 		if body.Dependencies != nil {
 			d.dependencies = *body.Dependencies
 		}
@@ -423,7 +542,7 @@ func (h *MockAPIHandler) handleCreateDraft(w http.ResponseWriter, r *http.Reques
 			writeJSONError(w, http.StatusBadRequest, "validation_failed", "themeSlug is required", nil, nil)
 			return
 		}
-		th, exists := h.themes[username+"/"+slug]
+		th, exists := h.themes[themeKey(username, slug)]
 		if !exists {
 			writeJSONError(w, http.StatusNotFound, "theme_not_found", "theme not found", nil, nil)
 			return
@@ -434,11 +553,12 @@ func (h *MockAPIHandler) handleCreateDraft(w http.ResponseWriter, r *http.Reques
 				return
 			}
 		}
-
-		var latest MockVersion
-		if len(th.Versions) > 0 {
-			latest = th.Versions[0]
+		if h.liveDraftCount(username) >= 10 {
+			writeJSONError(w, http.StatusConflict, "too_many_drafts", "you already have 10 live drafts", nil, nil)
+			return
 		}
+
+		latest := maxMockVersion(th.Versions)
 
 		code := h.nextDraftCode()
 		d := &mockDraft{code: code, kind: "version", owner: username, themeSlug: slug, createdAt: now, updatedAt: now}
@@ -459,8 +579,11 @@ func (h *MockAPIHandler) handleCreateDraft(w http.ResponseWriter, r *http.Reques
 		}
 		if body.MinStarshipVersion != nil {
 			d.minStarshipVersion = body.MinStarshipVersion
-		} else {
-			msv := "1.24.0"
+		} else if latest.MinStarshipVersion != "" {
+			// Copied from latest, which may itself be unset (nil) - never
+			// hard-coded, since the mock must not invent a value the hub
+			// never actually stored.
+			msv := latest.MinStarshipVersion
 			d.minStarshipVersion = &msv
 		}
 		d.versionNotes = body.VersionNotes
@@ -519,6 +642,10 @@ func (h *MockAPIHandler) handlePatchDraft(w http.ResponseWriter, r *http.Request
 		writeJSONError(w, http.StatusBadRequest, "validation_failed", "invalid JSON body", nil, nil)
 		return
 	}
+	if fcode, msg, ok := validateMockDraftFields(body); !ok {
+		writeJSONError(w, http.StatusBadRequest, fcode, msg, nil, nil)
+		return
+	}
 	if body.Config != nil && *body.Config != "" {
 		if ok, msg := validateMockConfig(*body.Config); !ok {
 			writeJSONError(w, http.StatusBadRequest, "invalid_config", msg, nil, nil)
@@ -535,9 +662,21 @@ func (h *MockAPIHandler) handlePatchDraft(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if body.Slug != nil && d.kind == "theme" && *body.Slug != derefStr(d.slug) {
+	// A version draft never accepts any theme-only field, present or not -
+	// matching the hub, which rejects the whole request rather than
+	// silently dropping just those fields (POST kind:version, by contrast,
+	// simply never reads them at all - there's no "the user explicitly
+	// asked to change this" moment to reject there).
+	if d.kind == "version" {
+		if body.Name != nil || body.Slug != nil || body.Description != nil || body.Group != nil || body.ColorMode != nil || body.ColorSchemeID != nil {
+			writeJSONError(w, http.StatusBadRequest, "validation_failed", "name, slug, description, group and colorMode don't apply to a version draft", nil, nil)
+			return
+		}
+	}
+
+	if body.Slug != nil && *body.Slug != derefStr(d.slug) {
 		newSlug := *body.Slug
-		if _, exists := h.themes[username+"/"+newSlug]; exists {
+		if _, exists := h.themes[themeKey(username, newSlug)]; exists {
 			writeJSONError(w, http.StatusConflict, "duplicate_slug", "you already have a published theme with that slug", nil, nil)
 			return
 		}
@@ -562,6 +701,9 @@ func (h *MockAPIHandler) handlePatchDraft(w http.ResponseWriter, r *http.Request
 	if body.ColorMode != nil {
 		d.colorMode = body.ColorMode
 	}
+	if body.ColorSchemeID != nil {
+		d.colorSchemeID = body.ColorSchemeID
+	}
 	if body.Dependencies != nil {
 		d.dependencies = *body.Dependencies
 	}
@@ -578,12 +720,17 @@ func (h *MockAPIHandler) handlePatchDraft(w http.ResponseWriter, r *http.Request
 		d.source = body.Source
 	}
 
-	if body.Config != nil && *body.Config != "" {
-		oldNorm := ""
-		if d.config != nil {
-			oldNorm = normalizeConfigForCompare(*d.config)
-		}
-		if normalizeConfigForCompare(*body.Config) != oldNorm {
+	// Any config write via a bearer token sets configSource "cli" and bumps
+	// configUpdatedAt, even when the content is unchanged - the write
+	// itself is what matters, not whether it happened to be a no-op.
+	// "" normalizes to null (clears the config), per the contract's general
+	// field-limits rule.
+	if body.Config != nil {
+		if *body.Config == "" {
+			d.config = nil
+			d.configSource = nil
+			d.configUpdatedAt = nil
+		} else {
 			applyMockConfig(d, body.Config, time.Now().UTC())
 		}
 	}
@@ -645,6 +792,7 @@ func (h *MockAPIHandler) handlePutScreenshot(w http.ResponseWriter, r *http.Requ
 	}
 
 	var data []byte
+	var declaredType string
 	for {
 		part, perr := mr.NextPart()
 		if perr == io.EOF {
@@ -657,6 +805,7 @@ func (h *MockAPIHandler) handlePutScreenshot(w http.ResponseWriter, r *http.Requ
 		if part.FormName() != "screenshot" {
 			continue
 		}
+		declaredType = part.Header.Get("Content-Type")
 		buf, rerr := io.ReadAll(io.LimitReader(part, mockMaxScreenshotBytes+1))
 		_ = part.Close()
 		if rerr != nil {
@@ -673,7 +822,17 @@ func (h *MockAPIHandler) handlePutScreenshot(w http.ResponseWriter, r *http.Requ
 		writeJSONError(w, http.StatusBadRequest, "invalid_screenshot", "screenshot too large", nil, nil)
 		return
 	}
-	if mockDetectImageContentType(data) == "" {
+	// Require the part's declared Content-Type to be one of the three
+	// accepted types AND to agree with what the magic bytes actually say -
+	// matching the hub, which trusts neither alone.
+	detected := mockDetectImageContentType(data)
+	switch declaredType {
+	case "image/png", "image/jpeg", "image/webp":
+	default:
+		writeJSONError(w, http.StatusBadRequest, "invalid_screenshot", "Content-Type must be image/png, image/jpeg or image/webp", nil, nil)
+		return
+	}
+	if detected == "" || detected != declaredType {
 		writeJSONError(w, http.StatusBadRequest, "invalid_screenshot", "not a PNG, JPEG or WebP image", nil, nil)
 		return
 	}
@@ -730,7 +889,7 @@ func (h *MockAPIHandler) handlePublishDraft(w http.ResponseWriter, username, cod
 	switch d.kind {
 	case "theme":
 		slug := derefStr(d.slug)
-		if _, exists := h.themes[username+"/"+slug]; exists {
+		if _, exists := h.themes[themeKey(username, slug)]; exists {
 			writeJSONError(w, http.StatusConflict, "duplicate_slug", "a theme with that slug already exists", nil, nil)
 			return
 		}
@@ -746,14 +905,15 @@ func (h *MockAPIHandler) handlePublishDraft(w http.ResponseWriter, username, cod
 			CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 			UpdatedAt:   time.Now().UTC().Format(time.RFC3339),
 			Versions: []MockVersion{{
-				Version:       version,
-				ConfigContent: *d.config,
-				VersionNotes:  derefStr(d.versionNotes),
-				Dependencies:  d.dependencies,
-				CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+				Version:            version,
+				ConfigContent:      *d.config,
+				VersionNotes:       derefStr(d.versionNotes),
+				Dependencies:       d.dependencies,
+				MinStarshipVersion: derefStr(d.minStarshipVersion),
+				CreatedAt:          time.Now().UTC().Format(time.RFC3339),
 			}},
 		}
-		h.themes[username+"/"+slug] = &newTheme
+		h.themes[themeKey(username, slug)] = &newTheme
 		delete(h.drafts, code)
 
 		writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -762,7 +922,7 @@ func (h *MockAPIHandler) handlePublishDraft(w http.ResponseWriter, username, cod
 		})
 
 	case "version":
-		th, exists := h.themes[username+"/"+d.themeSlug]
+		th, exists := h.themes[themeKey(username, d.themeSlug)]
 		if !exists {
 			writeJSONError(w, http.StatusNotFound, "theme_not_found", "theme not found", nil, nil)
 			return
@@ -770,7 +930,7 @@ func (h *MockAPIHandler) handlePublishDraft(w http.ResponseWriter, username, cod
 		newVersion := derefStr(d.version)
 		latest := ""
 		if len(th.Versions) > 0 {
-			latest = th.Versions[0].Version
+			latest = maxMockVersion(th.Versions).Version
 		}
 		for _, v := range th.Versions {
 			if v.Version == newVersion {
@@ -784,11 +944,12 @@ func (h *MockAPIHandler) handlePublishDraft(w http.ResponseWriter, username, cod
 		}
 
 		th.Versions = append([]MockVersion{{
-			Version:       newVersion,
-			ConfigContent: *d.config,
-			VersionNotes:  derefStr(d.versionNotes),
-			Dependencies:  d.dependencies,
-			CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+			Version:            newVersion,
+			ConfigContent:      *d.config,
+			VersionNotes:       derefStr(d.versionNotes),
+			Dependencies:       d.dependencies,
+			MinStarshipVersion: derefStr(d.minStarshipVersion),
+			CreatedAt:          time.Now().UTC().Format(time.RFC3339),
 		}}, th.Versions...)
 		delete(h.drafts, code)
 
