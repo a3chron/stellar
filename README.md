@@ -119,6 +119,11 @@ and the binary are removed. Restore a backup with `stellar apply <username>/back
 *before* uninstalling if you want your original prompt back, or pass
 `--keep-config` to keep the directory.
 
+Unless you pass `--keep-config`, stellar first lists any of your own themes
+and config backups that are about to go with it (it never lists downloaded
+themes - those you can always get back with `stellar apply`), so you know
+to pass `--keep-config` first if you want to keep them.
+
 ## Why use
 
 **Before:** Getting good starship configs so far was mostly random, from someones github dotfiles, searching for something entirely else...  
@@ -158,8 +163,13 @@ stellar current
 # Get theme info
 stellar info a3chron/ctp-green
 
-# Clean cache (keep current)
+# Clean cache - removes only themes stellar downloaded, keeps the current
+# theme, your own themes, and your backups
 stellar clean
+
+# Also remove your own themes (hand-made, or from new/fork) - everything
+# except the currently applied theme; still never your backups
+stellar clean --include-own
 
 # Remove all versions of a theme
 stellar remove a3chron/ctp-green
@@ -280,8 +290,9 @@ immediately. See `stellar publish --help` for the full set of flags
 stellar cache (your logged-in username by default), and
 `stellar fork author/slug[@version] [[author/]name]` copies an existing
 theme - from the hub, or your local cache if you're offline - into one you
-own and can edit freely. Both are protected from `stellar clean`, same as
-your [backups](#automatic-backup-of-your-original-config).
+own and can edit freely. A plain `stellar clean` never removes either
+(`--include-own` does); your [backups](#automatic-backup-of-your-original-config)
+stay protected even then.
 
 Your login is stored at `~/.config/stellar/credentials.json` (readable only
 by you). `stellar auth status` shows who you're logged in as,
@@ -321,8 +332,15 @@ Its content is already backed up as <username>/backup@1.0 - stellar now manages 
 
 Stellar recognizes its own applied file by a checksum recorded in `~/.config/stellar/config.json`, independent of apply mode (symlink or copy) or OS. This means editing a cached theme file directly and re-applying it, or running `stellar clean`/`stellar clean --all` and then applying another theme, never creates a spurious backup, only a config file you actually hand-edited yourself gets preserved.
 
-`stellar clean` (with or without `--all`) never deletes your backups either. 
-They're preserved automatically and only removed if you explicitly run `stellar remove <username>/backup`.
+`stellar clean` never deletes your backups, with or without `--all` or
+`--include-own`. They're preserved automatically and only removed if you
+explicitly run `stellar remove <username>/backup`.
+
+More generally, `stellar clean` only ever removes themes it downloaded
+itself - never a theme you made yourself, whether that's a hand-written
+config under `~/.config/stellar/<you>/`, or one created with `stellar new`/
+`stellar fork`. Pass `--include-own` if you actually want those gone too
+(see [Basic Usage](#basic-usage)).
 
 This ensures your carefully crafted config is never lost :) You can apply the newest backup anytime with:
 ```bash
