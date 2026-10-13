@@ -455,51 +455,64 @@ func TestE2E_List(t *testing.T) {
 		require.NoError(t, err)
 	})
 
+	// runList runs `stellar list` and returns what it printed.
+	runList := func(t *testing.T) string {
+		t.Helper()
+		var err error
+		out := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"list"})
+			cmd.SetOut(new(bytes.Buffer))
+			err = cmd.Execute()
+		})
+		require.NoError(t, err)
+		return out
+	}
+
 	t.Run("Multiple themes", func(t *testing.T) {
 		env := testutil.SetupTestEnv(t)
 
-		env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
 		env.CreateThemeFile("bob", "sunset", "2.0", testutil.SampleTOML())
+		env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
 
-		cmd := NewRootCmd()
-		cmd.SetArgs([]string{"list"})
-		cmd.SetOut(new(bytes.Buffer))
-
-		err := cmd.Execute()
-		require.NoError(t, err)
+		out := runList(t)
+		assert.Contains(t, out, "Cached Themes (2):")
+		// Sorted by name, one line each.
+		assert.Regexp(t, `(?s)alice/rainbow\s+1\.0\n.*bob/sunset\s+2\.0\n`, out)
 	})
 
 	t.Run("Current theme marked", func(t *testing.T) {
 		env := testutil.SetupTestEnv(t)
 
 		env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+		env.CreateThemeFile("alice", "rainbow", "1.1", testutil.SampleTOML())
 		config := `{
   "current_theme": "alice/rainbow@1.0",
   "current_path": "` + env.StellarDir + `/alice/rainbow/1.0.toml"
 }`
 		env.CreateConfig(config)
 
-		cmd := NewRootCmd()
-		cmd.SetArgs([]string{"list"})
-		cmd.SetOut(new(bytes.Buffer))
-
-		err := cmd.Execute()
-		require.NoError(t, err)
+		out := runList(t)
+		// The marker sits on the theme and "(current)" on the applied
+		// version - here not the newest one.
+		assert.Contains(t, out, "✳ alice/rainbow  1.1, 1.0 (current)")
 	})
 
-	t.Run("Multiple versions", func(t *testing.T) {
+	t.Run("Each theme once, versions newest first", func(t *testing.T) {
 		env := testutil.SetupTestEnv(t)
 
-		env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
-		env.CreateThemeFile("alice", "rainbow", "1.5", testutil.SampleTOML())
-		env.CreateThemeFile("alice", "rainbow", "2.0", testutil.SampleTOML())
+		for _, v := range []string{"1.0", "1.9", "1.10", "2.0"} {
+			env.CreateThemeFile("alice", "rainbow", v, testutil.SampleTOML())
+		}
+		env.CreateThemeFile("bob", "sunset", "1.0", testutil.SampleTOML())
 
-		cmd := NewRootCmd()
-		cmd.SetArgs([]string{"list"})
-		cmd.SetOut(new(bytes.Buffer))
-
-		err := cmd.Execute()
-		assert.NoError(t, err)
+		out := runList(t)
+		assert.Contains(t, out, "Cached Themes (2):")
+		assert.Equal(t, 1, strings.Count(out, "alice/rainbow"))
+		// Numeric order: 1.10 is newer than 1.9.
+		assert.Contains(t, out, "alice/rainbow  2.0, 1.10, 1.9, 1.0\n")
+		// Names are padded so the versions line up.
+		assert.Contains(t, out, "bob/sunset     1.0\n")
 	})
 }
 
