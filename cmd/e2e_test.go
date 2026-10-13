@@ -1349,7 +1349,7 @@ func TestE2E_Clean(t *testing.T) {
 		assert.Contains(t, out, "Removed 1 of your own theme(s)")
 	})
 
-	t.Run("--include-own aborts the own-theme removal on n, downloads still go", func(t *testing.T) {
+	t.Run("--include-own on n aborts and removes nothing at all", func(t *testing.T) {
 		env := testutil.SetupTestEnv(t)
 		resetFlags()
 
@@ -1357,17 +1357,19 @@ func TestE2E_Clean(t *testing.T) {
 		downloadedPath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
 		env.CreateConfig(`{"downloaded_themes": ["alice/rainbow"]}`)
 
-		out := testutil.CaptureOutput(t, func() {
+		var execErr error
+		testutil.CaptureOutput(t, func() {
 			cmd := NewRootCmd()
 			cmd.SetArgs([]string{"clean", "--include-own"})
 			cmd.SetOut(new(bytes.Buffer))
 			cmd.SetIn(strings.NewReader("n\n"))
-			require.NoError(t, cmd.Execute())
+			execErr = cmd.Execute()
 		})
 
+		require.Error(t, execErr)
+		assert.Contains(t, execErr.Error(), "nothing was removed")
 		assert.True(t, env.FileExists(handMadePath), "declining must keep own themes")
-		assert.False(t, env.FileExists(downloadedPath), "downloads never need a confirmation")
-		assert.Contains(t, out, "Keeping your own themes")
+		assert.True(t, env.FileExists(downloadedPath), "declining must not clean anything else either")
 	})
 
 	t.Run("--include-own on a non-TTY EOF errors and names --yes", func(t *testing.T) {

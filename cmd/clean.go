@@ -63,11 +63,9 @@ remove the currently applied theme.`,
 				return cerr
 			}
 			if !ok {
-				// A decline only backs out of removing the user's own themes -
-				// the plain download cleanup below still goes ahead, matching
-				// "downloads never need a confirmation".
-				opts.IncludeOwn = false
-				color.Yellow("Keeping your own themes.")
+				// "No" means nothing happens - not even the download cleanup
+				// this run would otherwise have done along the way.
+				return fmt.Errorf("aborted: nothing was removed")
 			}
 		}
 
