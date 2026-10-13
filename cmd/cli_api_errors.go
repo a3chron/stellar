@@ -8,8 +8,10 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/a3chron/stellar/internal/api"
+	"github.com/a3chron/stellar/internal/paths"
 )
 
 // notLoggedInError is what every command shows when the stored (or
@@ -21,28 +23,44 @@ func notLoggedInError() error {
 	})
 }
 
-// wrapHubAPIError translates the two sentinel failure modes every CLI
+// wrapHubAPIError translates the sentinel failure modes every CLI
 // auth/drafts call can hit into their user-facing form:
 //
+//   - api.ErrOffline: the request never reached a server at all. api's own
+//     wrapTransportError builds this with TWO %w verbs (fmt.Errorf("%w: %w",
+//     ErrOffline, err)), which gives the result an Unwrap() []error method -
+//     and printCLIError treats anything with that method as several
+//     independent errors to print on their own "Error:" lines. Left
+//     unwrapped, a single offline failure would print as two confusing
+//     "Error:" lines instead of one; this returns a flat hintedError (whose
+//     Error() is a plain string) with the same wording hub_errors.go already
+//     uses elsewhere, so it reads exactly like any other "are you offline?"
+//     message.
 //   - api.ErrHubTooOld: the hub doesn't implement these routes at all (the
 //     CLI shipped ahead of the hub, or the hub was rolled back behind it).
 //     Showing "Unauthorized" or "run stellar auth" here would send the user
 //     on a pointless loop re-authenticating against a hub that will never
 //     accept it - so this gets its own distinct message instead, with a
-//     hint pointing at either upgrading the hub or the web upload form.
+//     hint pointing at either upgrading the hub or its own web upload form
+//     (the base URL actually configured, not a hard-coded production one -
+//     a self-hosted or dev deployment must get a link that works for it).
 //   - api.ErrUnauthorized: a real, contract-shaped 401 (invalid or revoked
 //     token) -> notLoggedInError().
 //
-// Any other error (offline, a different APIError, ...) is returned
-// unchanged. err == nil returns nil.
+// Any other error (a different APIError, ...) is returned unchanged.
+// err == nil returns nil.
 func wrapHubAPIError(err error) error {
 	if err == nil {
 		return nil
 	}
+	if errors.Is(err, api.ErrOffline) {
+		return newHintedError(fmt.Sprintf("can't reach stellar-hub (are you offline?) (details: %v)", err))
+	}
 	if errors.Is(err, api.ErrHubTooOld) {
+		base := paths.APIURL(api.BaseURL)
 		return newHintedError(err.Error(), hint{
 			label:  "Hint",
-			values: []string{"ask the hub owner to update it, or publish at https://stellar.a3chron.dev/upload for now"},
+			values: []string{fmt.Sprintf("ask the hub owner to update it, or publish at %s/upload for now", base)},
 		})
 	}
 	if errors.Is(err, api.ErrUnauthorized) {

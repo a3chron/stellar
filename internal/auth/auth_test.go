@@ -114,6 +114,54 @@ func TestDelete_AbsentEntryIsNotAnError(t *testing.T) {
 	require.NoError(t, Delete("https://stellar.example"))
 }
 
+// TestStoredToken_IgnoresEnvOverride guards the case STELLAR_TOKEN exists
+// for: an operation that must act on the real stored credential (revoking
+// it on logout/uninstall) must never be fooled into thinking a CI-only env
+// override is the thing that got saved to disk.
+func TestStoredToken_IgnoresEnvOverride(t *testing.T) {
+	setupTestHome(t)
+	require.NoError(t, Save("https://stellar.example", "stl_stored"))
+	t.Setenv(paths.EnvToken, "stl_from_env")
+
+	token, err := StoredToken("https://stellar.example")
+	require.NoError(t, err)
+	assert.Equal(t, "stl_stored", token)
+}
+
+func TestStoredToken_EmptyWhenOnlyEnvIsSet(t *testing.T) {
+	setupTestHome(t)
+	t.Setenv(paths.EnvToken, "stl_from_env")
+
+	token, err := StoredToken("https://stellar.example")
+	require.NoError(t, err)
+	assert.Empty(t, token, "StoredToken must never fall back to STELLAR_TOKEN")
+}
+
+func TestStoredEntries_ListsEveryHost(t *testing.T) {
+	setupTestHome(t)
+	require.NoError(t, Save("https://stellar.example", "stl_prod"))
+	require.NoError(t, Save("http://127.0.0.1:3000", "stl_dev"))
+
+	entries, err := StoredEntries()
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+
+	byHost := make(map[string]string, len(entries))
+	for _, e := range entries {
+		byHost[e.BaseURL] = e.Token
+	}
+	assert.Equal(t, "stl_prod", byHost["https://stellar.example"])
+	assert.Equal(t, "stl_dev", byHost["http://127.0.0.1:3000"])
+}
+
+func TestStoredEntries_EmptyWhenNothingStored(t *testing.T) {
+	setupTestHome(t)
+
+	entries, err := StoredEntries()
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
 func TestNormalizeBaseURL(t *testing.T) {
 	cases := map[string]string{
 		"https://Stellar.Example/": "https://stellar.example",

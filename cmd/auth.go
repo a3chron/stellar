@@ -126,7 +126,13 @@ var authLogoutCmd = &cobra.Command{
 	Args:  argsWithUsage(cobra.NoArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		baseURL := authBaseURL()
-		token, err := auth.Token(baseURL)
+		// StoredToken, not Token: logout must act on the credential actually
+		// saved to disk, never on a STELLAR_TOKEN override - revoking and
+		// deleting "the token" when STELLAR_TOKEN is set would otherwise
+		// either do nothing (STELLAR_TOKEN isn't stored, so there'd be
+		// nothing found to delete) or, worse, be mistaken for the stored
+		// entry and wrongly reported as logged out.
+		token, err := auth.StoredToken(baseURL)
 		if err != nil {
 			return err
 		}
@@ -140,13 +146,17 @@ var authLogoutCmd = &cobra.Command{
 			if rerr := api.NewAuthedClient(token).RevokeToken(); rerr != nil {
 				color.Yellow("Warning: couldn't revoke the token on stellar-hub: %v", wrapHubAPIError(rerr))
 			}
+			if err := auth.Delete(baseURL); err != nil {
+				return err
+			}
+			color.Green("Logged out")
+		} else {
+			color.Yellow("Nothing stored for %s - nothing to log out of here.", baseURL)
 		}
 
-		if err := auth.Delete(baseURL); err != nil {
-			return err
+		if os.Getenv(paths.EnvToken) != "" {
+			color.HiBlack("STELLAR_TOKEN is still set - it was not revoked or changed; unset it yourself if you're done with it.")
 		}
-
-		color.Green("Logged out")
 		return nil
 	},
 }
@@ -180,7 +190,8 @@ func runAuthLogin(cmd *cobra.Command, args []string) error {
 		return wrapHubAPIError(err)
 	}
 
-	fmt.Printf("Your code: %s\n", color.New(color.Bold).Sprint(start.UserCode))
+	userCode := term.SanitizeForTerminal(start.UserCode)
+	fmt.Printf("Your code: %s\n", color.New(color.Bold).Sprint(userCode))
 	link := start.VerificationURLComplete
 	if link == "" {
 		link = start.VerificationURL
@@ -242,22 +253,24 @@ func pollForToken(start *api.StartAuthResponse) (token, name, username string, e
 			return resp.Token, resp.User.Name, resp.User.Username, nil
 		}
 
-		// A transient transport failure (offline for a moment, a dropped
-		// connection) is not the same as the hub actively telling us
-		// something - keep polling through the deadline rather than aborting
-		// the whole login on one blip, but don't spin forever on a
-		// genuinely dead connection either.
-		if errors.Is(perr, api.ErrOffline) {
+		// A transient failure - offline for a moment, a dropped connection,
+		// or the hub itself answering with a 5xx (a deploy in progress, a
+		// gateway timeout) - is not the hub actively telling us something
+		// about the login; keep polling through the deadline rather than
+		// aborting on one blip, but don't spin forever on a genuinely dead
+		// connection or a hub that's down for good either.
+		var apiErr *api.APIError
+		isServerError := errors.As(perr, &apiErr) && apiErr.Status >= 500
+		if errors.Is(perr, api.ErrOffline) || isServerError {
 			consecutiveTransportFailures++
 			if consecutiveTransportFailures >= maxConsecutiveAuthTransportFailures {
-				return "", "", "", fmt.Errorf("can't reach stellar-hub (are you offline?): %w", perr)
+				return "", "", "", wrapHubAPIError(perr)
 			}
 			continue
 		}
 		consecutiveTransportFailures = 0
 
-		var apiErr *api.APIError
-		if errors.As(perr, &apiErr) {
+		if apiErr != nil {
 			switch apiErr.Code {
 			case "authorization_pending":
 				continue

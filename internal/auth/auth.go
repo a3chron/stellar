@@ -129,7 +129,17 @@ func Token(baseURL string) (string, error) {
 	if t := os.Getenv(paths.EnvToken); t != "" {
 		return t, nil
 	}
+	return StoredToken(baseURL)
+}
 
+// StoredToken returns the token actually saved in credentials.json for
+// baseURL, ignoring STELLAR_TOKEN entirely. Use this wherever an operation
+// must act on the real stored credential specifically - revoking it on
+// logout/uninstall, say - so a CI-only STELLAR_TOKEN override can never be
+// mistaken for (and revoked/deleted as though it were) a login that was
+// actually saved to disk. Returns "" (no error) when nothing is stored for
+// this hub.
+func StoredToken(baseURL string) (string, error) {
 	s, err := load()
 	if err != nil {
 		return "", err
@@ -139,6 +149,31 @@ func Token(baseURL string) (string, error) {
 		return "", nil
 	}
 	return e.Token, nil
+}
+
+// StoredEntry pairs a normalized base URL with its saved token, for
+// iterating every hub credentials.json currently has a login for (see
+// StoredEntries).
+type StoredEntry struct {
+	BaseURL string
+	Token   string
+}
+
+// StoredEntries returns every base URL/token pair currently saved in
+// credentials.json, in no particular order. Used by `stellar uninstall` to
+// revoke every stored login (not just whichever one STELLAR_API_URL/
+// STELLAR_TOKEN currently points at) before the file holding them is
+// removed.
+func StoredEntries() ([]StoredEntry, error) {
+	s, err := load()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]StoredEntry, 0, len(s))
+	for baseURL, e := range s {
+		out = append(out, StoredEntry{BaseURL: baseURL, Token: e.Token})
+	}
+	return out, nil
 }
 
 // Save stores token for baseURL, replacing any existing entry for that hub.

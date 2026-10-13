@@ -72,12 +72,19 @@ remove only the binary.`,
 
 		detachTarget := managedSymlinkTarget(starshipPath, stellarHome)
 
+		// Collected once so the "This will:" preview and the actual
+		// revocation below act on the exact same list.
+		loginEntries, _ := auth.StoredEntries()
+
 		// Say exactly what is about to happen before asking - this is the one
 		// stellar command that deletes things the user may not be able to get
 		// back (their original starship.toml backups).
 		color.Yellow("This will:")
 		if detachTarget != "" {
 			fmt.Printf("  - replace the symlink %s with a plain copy of your current theme\n", starshipPath)
+		}
+		if !uninstallKeepConfig && len(loginEntries) > 0 {
+			fmt.Println("  - log this machine out of stellar-hub")
 		}
 		if uninstallKeepConfig {
 			fmt.Printf("  - keep %s (themes, backups, config)\n", stellarHome)
@@ -118,12 +125,13 @@ remove only the binary.`,
 		}
 
 		if !uninstallKeepConfig {
-			// Best-effort: revoke the stellar-hub login before the directory
-			// holding credentials.json is gone. Failures (offline, no login,
-			// an older hub without this route) are not fatal - the directory
-			// removal below is what actually matters, and a token left valid
-			// on the hub can still be revoked later from settings.
-			revokeStoredToken()
+			// Best-effort: revoke every stored stellar-hub login - not just
+			// whichever one STELLAR_API_URL currently points at - before the
+			// directory holding credentials.json is gone. Each is revoked
+			// against its OWN base URL (NewAuthedClientWithURL), since a
+			// login saved for a dev server or an old deployment must not be
+			// sent to whatever hub happens to be configured right now.
+			reportRevokedLogins(loginEntries)
 
 			if err := os.RemoveAll(stellarHome); err != nil {
 				return fmt.Errorf("failed to remove %s: %w", stellarHome, err)
@@ -178,20 +186,28 @@ func printOwnThemesAndBackupsNotice(cfg *config.Config) {
 	color.Cyan("Use --keep-config to keep these.")
 }
 
-// revokeStoredToken best-effort revokes the stellar-hub login stored for the
-// current STELLAR_API_URL, if any. Uninstalling removes credentials.json
-// along with the rest of stellar home either way, so this is purely about
-// not leaving a still-valid token sitting in the hub's database - any
-// failure here (offline, nothing stored, an older hub) is deliberately
-// silent, matching the fact that the directory removal is about to happen
-// regardless.
-func revokeStoredToken() {
-	baseURL := paths.APIURL(api.BaseURL)
-	token, err := auth.Token(baseURL)
-	if err != nil || token == "" {
+// reportRevokedLogins best-effort revokes every entry in loginEntries
+// against its own base URL and prints the outcome. Uninstalling removes
+// credentials.json along with the rest of stellar home either way, so a
+// failure here (offline, an older hub without this route) is not fatal -
+// the directory removal below is what actually matters - but the user is
+// told where to revoke it by hand instead, since a token left valid on the
+// hub otherwise fails completely silently.
+func reportRevokedLogins(loginEntries []auth.StoredEntry) {
+	if len(loginEntries) == 0 {
 		return
 	}
-	_ = api.NewAuthedClient(token).RevokeToken()
+
+	allOK := true
+	for _, e := range loginEntries {
+		if err := api.NewAuthedClientWithURL(e.BaseURL, e.Token).RevokeToken(); err != nil {
+			allOK = false
+			color.Yellow("Couldn't revoke your stellar-hub login (offline?) - revoke it at %s/settings#cli-logins", e.BaseURL)
+		}
+	}
+	if allOK {
+		fmt.Println("Logged out of stellar-hub.")
+	}
 }
 
 // confirmUninstall reads a yes/no answer from in, following the same rule as

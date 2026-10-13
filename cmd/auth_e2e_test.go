@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -364,4 +365,90 @@ func TestLoginLabel(t *testing.T) {
 	assert.Equal(t, "a3chron", loginLabel("", "a3chron"))
 	assert.Equal(t, "Kurt (@a3chron)", loginLabel("Kurt", "a3chron"))
 	assert.Equal(t, "Kurt (@a3chron)", loginLabel("Ku\x1brt", "a3chron"))
+}
+
+// TestPollForToken_RetriesOn5xx guards review item 18: polling used to give
+// up on the very first 5xx (a hub mid-deploy answering with a gateway
+// error), instead of treating it like the transient-offline case it
+// functionally is.
+func TestPollForToken_RetriesOn5xx(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+	resetFlags()
+	stubAuthSleep(t)
+	mockAPI := testutil.CreateDefaultMockAPI()
+	env.SetupMockAPI(mockAPI)
+	mockAPI.SetNextAuthApprove(1, "testuser", "Test User")
+	mockAPI.SetNextAuthServerErrors(2)
+
+	out, err := runStellar(t, nil, "auth", "--no-browser")
+	require.NoError(t, err, "two transient 5xxs must not abort an otherwise-healthy login")
+	assert.Contains(t, out, "Logged in as")
+}
+
+func TestPollForToken_GivesUpAfterTooMany5xx(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+	resetFlags()
+	stubAuthSleep(t)
+	mockAPI := testutil.CreateDefaultMockAPI()
+	env.SetupMockAPI(mockAPI)
+	mockAPI.SetNextAuthApprove(1, "testuser", "Test User")
+	mockAPI.SetNextAuthServerErrors(maxConsecutiveAuthTransportFailures)
+
+	_, err := runStellar(t, nil, "auth", "--no-browser")
+	require.Error(t, err)
+}
+
+// TestE2E_AuthOffline_SinglePrintedError guards review item 19: api's
+// wrapTransportError builds ErrOffline with TWO %w verbs (giving it an
+// Unwrap() []error method), which printCLIError would otherwise treat as
+// multiple independent errors and print on separate "Error:" lines. Left
+// unhandled, a single offline failure read as two confusing lines instead
+// of one.
+func TestE2E_AuthOffline_SinglePrintedError(t *testing.T) {
+	testutil.SetupTestEnv(t)
+	resetFlags()
+	require.NoError(t, os.Setenv(paths.EnvAPIURL, "http://127.0.0.1:1"))
+	t.Cleanup(func() { _ = os.Unsetenv(paths.EnvAPIURL) })
+	require.NoError(t, auth.Save("http://127.0.0.1:1", "stl_sometoken"))
+
+	// printCLIError (cmd/userError.go) prefixes each independent error with
+	// its own "Error:" line - the real bug was two of them for one offline
+	// failure, so check the actual rendered output, not just the error
+	// returned to Go code.
+	var errBuf bytes.Buffer
+	_ = testutil.CaptureOutput(t, func() {
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"auth", "status"})
+		cmd.SetOut(new(bytes.Buffer))
+		cmd.SetErr(&errBuf)
+		_ = ExecuteCmd(cmd)
+	})
+	assert.Contains(t, errBuf.String(), "offline")
+	assert.Equal(t, 1, strings.Count(errBuf.String(), "Error:"), "got: %s", errBuf.String())
+}
+
+// TestE2E_AuthLogout_STELLAR_TOKEN guards review item 4: logout must act on
+// the credential actually stored on disk, never on a STELLAR_TOKEN
+// override, and must say plainly that STELLAR_TOKEN itself was untouched.
+func TestE2E_AuthLogout_STELLAR_TOKEN(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+	resetFlags()
+	mockAPI := testutil.CreateDefaultMockAPI()
+	env.SetupMockAPI(mockAPI)
+
+	storedToken := mockAPI.Token("stored-user", "Stored User")
+	require.NoError(t, auth.Save(env.MockServer.URL, storedToken))
+
+	envToken := mockAPI.Token("env-user", "Env User")
+	t.Setenv(paths.EnvToken, envToken)
+
+	out, err := runStellar(t, nil, "auth", "logout")
+	require.NoError(t, err)
+	assert.Contains(t, out, "Logged out")
+	assert.Contains(t, out, "STELLAR_TOKEN")
+
+	// The STORED entry (not the env one) must be gone.
+	remaining, terr := auth.StoredToken(env.MockServer.URL)
+	require.NoError(t, terr)
+	assert.Empty(t, remaining)
 }

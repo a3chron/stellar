@@ -157,11 +157,32 @@ func (h *MockAPIHandler) handleAuthStart(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// SetNextAuthServerErrors makes the next n POST /api/cli/auth/token requests
+// (for any device code) answer 500 with a plain-text, non-JSON body -
+// mirroring a Vercel gateway error during a hub deploy - before falling
+// through to the normal flow. Used to test that polling survives a
+// transient 5xx instead of giving up on the first one.
+func (h *MockAPIHandler) SetNextAuthServerErrors(n int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.authTokenForcedErrors = n
+}
+
 func (h *MockAPIHandler) handleAuthToken(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	h.mu.Lock()
+	if h.authTokenForcedErrors > 0 {
+		h.authTokenForcedErrors--
+		h.mu.Unlock()
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("Internal Server Error"))
+		return
+	}
+	h.mu.Unlock()
 
 	var body struct {
 		DeviceCode string `json:"deviceCode"`
