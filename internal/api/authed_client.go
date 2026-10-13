@@ -162,10 +162,30 @@ func (c *Client) classifyNewEndpointError(resp *http.Response) error {
 	if jsonErr == nil && payload.Code != "" {
 		return &APIError{Status: resp.StatusCode, Code: payload.Code, Message: payload.Error, Missing: payload.Missing, Details: payload.Details}
 	}
+
+	isLegacyStatus := resp.StatusCode == http.StatusUnauthorized ||
+		resp.StatusCode == http.StatusNotFound ||
+		resp.StatusCode == http.StatusMethodNotAllowed
+
 	if jsonErr == nil {
-		return &hubTooOldError{baseURL: c.baseURL}
+		// Valid JSON but no "code" at all. On 401/404/405 that's exactly a
+		// pre-upgrade hub's legacy shape ({"error":"Unauthorized"} from the
+		// old bearer-less routes, {"error":"Author not found"} from the old
+		// author/slug parsing) -> hubTooOldError. On any OTHER status - a
+		// raw 500 "Internal server error" and the like - an up-to-date hub
+		// can still omit a code, and that must not be misreported as "doesn't
+		// support CLI publishing yet"; it's a genuine failure on a route that
+		// does exist.
+		if isLegacyStatus {
+			return &hubTooOldError{baseURL: c.baseURL}
+		}
+		return &APIError{Status: resp.StatusCode, Message: payload.Error}
 	}
 
+	// Not JSON at all: a 404/405 means the route doesn't exist (hubTooOld);
+	// any other status with a non-JSON body (a Vercel infra error like
+	// 413/504 on a route that DOES exist) is a real request failure, not a
+	// missing-route signal.
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
 		return &hubTooOldError{baseURL: c.baseURL}
 	}

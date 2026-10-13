@@ -88,9 +88,18 @@ func save(s store) (err error) {
 		return err
 	}
 	tmpPath := tmp.Name()
+	// closed tracks whether the explicit tmp.Close() below already ran, so
+	// the deferred cleanup never closes it a second time: Close() on an
+	// already-closed *os.File returns os.ErrClosed, which the deferred
+	// assignment below would otherwise record into err even after a fully
+	// successful write+rename, making every save (and therefore every
+	// `stellar auth` login) report a spurious "file already closed" error.
+	closed := false
 	defer func() {
-		if cerr := tmp.Close(); cerr != nil && err == nil {
-			err = cerr
+		if !closed {
+			if cerr := tmp.Close(); cerr != nil && err == nil {
+				err = cerr
+			}
 		}
 		// Best-effort: only a leftover temp file if the rename below
 		// succeeded; harmless either way since a stale .tmp file is never
@@ -108,11 +117,7 @@ func save(s store) (err error) {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	// Re-opening isn't needed: os.Rename below works on the path, and the
-	// deferred tmp.Close() above is idempotent (a second Close just errors,
-	// which the deferred assignment would only record if err is still nil -
-	// harmless since the file is already closed and about to be removed/
-	// renamed).
+	closed = true
 	return os.Rename(tmpPath, path)
 }
 
