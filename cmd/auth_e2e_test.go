@@ -357,3 +357,11 @@ func TestPollForToken_GivesUpAfterTooManyTransportFailures(t *testing.T) {
 	require.Error(t, perr)
 	assert.Contains(t, perr.Error(), "offline")
 }
+
+func TestLoginLabel(t *testing.T) {
+	assert.Equal(t, "a3chron", loginLabel("a3chron", "a3chron"))
+	assert.Equal(t, "a3chron", loginLabel("A3chron", "a3chron"))
+	assert.Equal(t, "a3chron", loginLabel("", "a3chron"))
+	assert.Equal(t, "Kurt (@a3chron)", loginLabel("Kurt", "a3chron"))
+	assert.Equal(t, "Kurt (@a3chron)", loginLabel("Ku\x1brt", "a3chron"))
+}

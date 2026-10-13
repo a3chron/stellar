@@ -7,6 +7,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"os"
 	"time"
 
@@ -39,14 +40,17 @@ func whoamiWithToken(token string) (*api.WhoamiResponse, error) {
 	return api.NewAuthedClient(token).Whoami()
 }
 
-// displayName prefers the human name, falling back to the handle - and
-// strips control characters either way, since both values come straight
-// from the hub.
-func displayName(who *api.WhoamiResponse) string {
-	if who.Name != "" {
-		return term.SanitizeForTerminal(who.Name)
+// loginLabel is how the logged-in account is shown: "Kurt (@a3chron)", or
+// just the handle when the display name is empty or the same as it (a GitHub
+// login usually is). Control characters are stripped from both, since they
+// come straight from the hub.
+func loginLabel(name, username string) string {
+	username = term.SanitizeForTerminal(username)
+	name = term.SanitizeForTerminal(name)
+	if name == "" || strings.EqualFold(name, username) {
+		return username
 	}
-	return term.SanitizeForTerminal(who.Username)
+	return fmt.Sprintf("%s (@%s)", name, username)
 }
 
 // cacheUsername best-effort saves username into config.json so `stellar
@@ -108,7 +112,7 @@ var authStatusCmd = &cobra.Command{
 		}
 		cacheUsername(who.Username)
 
-		color.Green("Logged in as %s (@%s)", displayName(who), term.SanitizeForTerminal(who.Username))
+		color.Green("Logged in as %s", loginLabel(who.Name, who.Username))
 		if os.Getenv(paths.EnvToken) != "" {
 			color.HiBlack("(using STELLAR_TOKEN, not the stored credential)")
 		}
@@ -158,7 +162,7 @@ func runAuthLogin(cmd *cobra.Command, args []string) error {
 	if token, err := auth.Token(baseURL); err == nil && token != "" {
 		if who, werr := whoamiWithToken(token); werr == nil {
 			cacheUsername(who.Username)
-			color.Green("Already logged in as %s (@%s)", displayName(who), term.SanitizeForTerminal(who.Username))
+			color.Green("Already logged in as %s", loginLabel(who.Name, who.Username))
 			return nil
 		} else if !errors.Is(werr, api.ErrUnauthorized) {
 			// Anything other than "this token is no good" (offline, an older
@@ -199,11 +203,7 @@ func runAuthLogin(cmd *cobra.Command, args []string) error {
 	}
 	cacheUsername(username)
 
-	display := name
-	if display == "" {
-		display = username
-	}
-	color.Green("✓ Logged in as %s (@%s)", term.SanitizeForTerminal(display), term.SanitizeForTerminal(username))
+	color.Green("✓ Logged in as %s", loginLabel(name, username))
 	return nil
 }
 

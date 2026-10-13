@@ -943,9 +943,12 @@ func printDraftSummary(d *api.Draft) {
 		target = d.Theme.Slug
 	}
 
-	if target != "" {
+	switch {
+	case d.Kind == api.DraftKindVersion && target != "":
+		color.Green("✓ Draft %s: new version %s of %s", d.Code, version, name)
+	case target != "":
 		color.Green("✓ Draft %s: %s (%s %s)", d.Code, name, target, version)
-	} else {
+	default:
 		color.Green("✓ Draft %s: %s", d.Code, name)
 	}
 	fmt.Printf("Finish it on the hub: %s%s\n", term.Hyperlink(d.URL, d.URL), color.HiBlackString(term.ClickHint()))
