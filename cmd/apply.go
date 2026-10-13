@@ -180,10 +180,20 @@ var applyCmd = &cobra.Command{
 					// `apply --update` on an already-current theme printing
 					// nothing at all.
 					if hasLocalCache && updateTheme {
-						if latestVersion != localVer {
-							color.Yellow("Update available: %s -> %s", localVer, latestVersion)
-						} else {
+						switch {
+						case latestVersion == localVer:
 							color.Green("✓ Already on the latest version (%s)", latestVersion)
+						case theme.CompareSemver(latestVersion, localVer) < 0:
+							// The hub's latest is numerically LOWER than what's
+							// cached locally: the cached version itself was
+							// deleted from the hub (a theme's latest can only
+							// ever move forward otherwise) - "Update available"
+							// would misleadingly read as an upgrade, so this
+							// says plainly what happened before falling through
+							// to apply the hub's (now lower) latest below.
+							color.Yellow("%s@%s is no longer on stellar-hub - switching to its latest version, %s", themeID, localVer, latestVersion)
+						default:
+							color.Yellow("Update available: %s -> %s", localVer, latestVersion)
 						}
 					}
 

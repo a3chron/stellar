@@ -15,6 +15,12 @@ type DraftTheme struct {
 	Slug          string `json:"slug"`
 	Name          string `json:"name"`
 	LatestVersion string `json:"latestVersion"`
+	// HighestVersion is the highest version number this theme has ever had:
+	// max(LatestVersion, the highest version number ever deleted from it). A
+	// new version must beat THIS, not just LatestVersion - a deleted version
+	// number can never be reused. Empty from an older hub that doesn't send
+	// it yet, in which case callers should fall back to LatestVersion.
+	HighestVersion string `json:"highestVersion"`
 }
 
 // Draft mirrors the contract's Draft shape exactly. Pointer fields are the

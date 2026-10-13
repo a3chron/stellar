@@ -295,6 +295,10 @@ failing with the flag name to pass non-interactively) and publish
 immediately. See `stellar publish --help` for the full set of flags
 (`--slug`, `--name`, `--description`, `--group`, `--color-mode`, `--dep`,
 `--min-starship`, `--screenshot`, `--version`, `--notes`, `--draft`, `--yes`).
+Versions can be deleted in your hub settings, but a deleted number is never
+published again: `stellar publish` suggests (and the hub requires) a version
+above the highest one the theme has ever had, not just above the current
+latest.
 
 `stellar new [author/]name` creates an empty starter theme under your
 stellar cache (your logged-in username by default), and

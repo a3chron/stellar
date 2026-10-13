@@ -799,6 +799,17 @@ func suggestNextVersion(latest string) string {
 	return fmt.Sprintf("%d.0", n+1)
 }
 
+// versionFloor is the number a new version of the draft's theme has to beat:
+// HighestVersion - the latest, or a deleted version above it, since the hub
+// never reuses a deleted number - and LatestVersion from an older hub that
+// doesn't send HighestVersion.
+func versionFloor(th *api.DraftTheme) string {
+	if th.HighestVersion != "" {
+		return th.HighestVersion
+	}
+	return th.LatestVersion
+}
+
 // titleCase turns a slug ("my-cool-theme") into a readable default display
 // name ("My Cool Theme").
 func titleCase(slug string) string {
@@ -1347,7 +1358,7 @@ func fillMissingForPublish(r *bufio.Reader, interactive bool, client *api.Client
 			}
 			def := ""
 			if d.Theme != nil {
-				def = suggestNextVersion(d.Theme.LatestVersion)
+				def = suggestNextVersion(versionFloor(d.Theme))
 			}
 			v, err := promptText(r, "Version", def, "--version <version>")
 			if err != nil {

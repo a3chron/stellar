@@ -495,3 +495,24 @@ func TestE2E_PublishConfigIsEmpty(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "empty")
 }
+
+// TestE2E_PublishDeletedVersionRejectedWithHintAboveFloor covers the hub's
+// "delete a single version" feature: a version number that was deleted can
+// never be published again, even though it's no longer among the theme's
+// existing versions - the floor a new version must beat is the numeric
+// maximum of the latest existing version AND the highest version ever
+// deleted, and the hub's own wording explains why.
+func TestE2E_PublishDeletedVersionRejectedWithHintAboveFloor(t *testing.T) {
+	env, mockAPI := setupPublishEnv(t)
+	// testuser/sample-theme (from CreateDefaultMockAPI) has a real latest of
+	// 1.2; 2.0 was since deleted from the hub, raising the floor above it.
+	mockAPI.SetHighestDeletedVersion("testuser", "sample-theme", "2.0")
+	path := env.CreateThemeFile("testuser", "sample-theme", "1.9", testutil.SampleTOML()+"\n# tweak\n")
+
+	_, err := runStellar(t, nil, "publish", path, "--version", "2.0", "--publish", "--yes")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Version 2.0 isn't newer than 2.0 - it was deleted, and a deleted version number can't be used again")
+	// The hint still suggests a concrete next number, now computed above the
+	// deleted floor (3.0), not just above the latest existing version (2.0).
+	assert.Contains(t, err.Error(), "--version 3.0")
+}
