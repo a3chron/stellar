@@ -77,7 +77,7 @@ var rollbackCmd = &cobra.Command{
 				return fmt.Errorf("validation error: %w", err)
 			}
 			if !validationResult.Valid {
-				return fmt.Errorf("invalid config: %w", validationResult.Error)
+				return validationResult.Error
 			}
 
 			// A re-download is fresh content from the hub the user has never
@@ -148,7 +148,7 @@ var rollbackCmd = &cobra.Command{
 			printBackupNotice(backupInfo)
 		}
 
-		color.Green("Rolled back to: %s", cfg.CurrentTheme)
+		color.Green("✓ Rolled back to: %s", cfg.CurrentTheme)
 
 		warnPostApplyEnvironment()
 

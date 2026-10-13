@@ -67,3 +67,52 @@ func TestPromptYesNo_Enter(t *testing.T) {
 		assert.False(t, ok)
 	})
 }
+
+// TestPromptText_RequiredFieldWording guards review item 9: a required
+// (no-default) prompt that DID get a line back - a terminal where the user
+// just pressed Enter, or a piped explicit blank line - must not say "no
+// answer on stdin", since stdin plainly answered; that wording is reserved
+// for stdin hitting EOF with nothing read at all.
+func TestPromptText_RequiredFieldWording(t *testing.T) {
+	t.Run("blank line (Enter pressed) on a required field asks for a value, not stdin", func(t *testing.T) {
+		r := bufio.NewReader(strings.NewReader("\n"))
+		_, err := promptText(r, "Version", "", "--version <version>")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "a value is required")
+		assert.NotContains(t, err.Error(), "no answer on stdin")
+		assert.Contains(t, err.Error(), "--version <version>")
+	})
+
+	t.Run("true EOF with nothing typed still says no answer on stdin", func(t *testing.T) {
+		r := bufio.NewReader(strings.NewReader(""))
+		_, err := promptText(r, "Version", "", "--version <version>")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no answer on stdin")
+	})
+
+	t.Run("blank line with a default still returns the default", func(t *testing.T) {
+		r := bufio.NewReader(strings.NewReader("\n"))
+		v, err := promptText(r, "Version", "1.3", "--version <version>")
+		require.NoError(t, err)
+		assert.Equal(t, "1.3", v)
+	})
+}
+
+// TestPromptSelect_RequiredFieldWording mirrors
+// TestPromptText_RequiredFieldWording for promptSelect's no-default case.
+func TestPromptSelect_RequiredFieldWording(t *testing.T) {
+	t.Run("blank line with no default asks for a value, not stdin", func(t *testing.T) {
+		r := bufio.NewReader(strings.NewReader("\n"))
+		_, err := promptSelect(r, "Pick one", []string{"a", "b"}, -1, "--slug <slug>")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "a value is required")
+		assert.NotContains(t, err.Error(), "no answer on stdin")
+	})
+
+	t.Run("true EOF with no default says no answer on stdin", func(t *testing.T) {
+		r := bufio.NewReader(strings.NewReader(""))
+		_, err := promptSelect(r, "Pick one", []string{"a", "b"}, -1, "--slug <slug>")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no answer on stdin")
+	})
+}

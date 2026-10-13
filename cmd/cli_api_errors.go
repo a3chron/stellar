@@ -7,6 +7,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -59,12 +60,73 @@ func wrapHubAPIError(err error) error {
 	if errors.Is(err, api.ErrHubTooOld) {
 		base := paths.APIURL(api.BaseURL)
 		return newHintedError(err.Error(), hint{
-			label:  "Hint",
-			values: []string{fmt.Sprintf("ask the hub owner to update it, or publish at %s/upload for now", base)},
+			label: "Hint",
+			values: []string{
+				"ask the hub owner to update it",
+				fmt.Sprintf("or publish at %s/upload for now", base),
+			},
 		})
 	}
 	if errors.Is(err, api.ErrUnauthorized) {
 		return notLoggedInError()
 	}
+
+	// Beyond the sentinel cases above, a handful of contract error codes
+	// come up often enough in normal use (not just as edge cases) that a
+	// raw "Error: you already have a draft with that slug" leaves the user
+	// to go figure out what to do about it themselves. These attach the
+	// same actionable hint the equivalent situation gets elsewhere in the
+	// CLI, without changing the underlying message any caller might still
+	// be matching with errors.Is/APIError.Code.
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.Code {
+		case "duplicate_slug":
+			return newHintedError(apiErr.Error(), hint{
+				label:  "Hint",
+				values: []string{"pick a different slug with --slug, or publish a new version of the existing theme instead"},
+			})
+		case "draft_exists":
+			if code := existingDraftCodeFromDetails(apiErr.Details); code != "" {
+				return newHintedError(apiErr.Error(), hint{
+					label:  "Hint",
+					values: []string{fmt.Sprintf("attach to it with --draft %s, or finish it on the hub", code)},
+				})
+			}
+			return newHintedError(apiErr.Error(), hint{
+				label:  "Hint",
+				values: []string{"finish or delete it on the hub, then try again"},
+			})
+		case "too_many_drafts":
+			base := paths.APIURL(api.BaseURL)
+			return newHintedError(apiErr.Error(), hint{
+				label:  "Hint",
+				values: []string{fmt.Sprintf("finish or delete some drafts at %s/settings#drafts, then try again", base)},
+			})
+		case "theme_not_found":
+			return newHintedError(apiErr.Error(), hint{
+				label:  "Hint",
+				values: []string{"check the author/slug - stellar info <author>/<slug> can confirm it exists"},
+			})
+		}
+	}
+
 	return err
+}
+
+// existingDraftCodeFromDetails extracts the "code" field a draft_exists
+// error's details carry (the already-existing draft's code) - best-effort:
+// an empty result (no details, different shape, parse failure) just means
+// the caller falls back to a hint without a specific code to point at.
+func existingDraftCodeFromDetails(details json.RawMessage) string {
+	if len(details) == 0 {
+		return ""
+	}
+	var parsed struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(details, &parsed); err != nil {
+		return ""
+	}
+	return parsed.Code
 }

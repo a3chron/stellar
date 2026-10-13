@@ -2736,7 +2736,8 @@ func TestE2E_ValidatesCachedTheme(t *testing.T) {
 
 		err := cmd.Execute()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid")
+		assert.Contains(t, err.Error(), "invalid TOML")
+		assert.NotContains(t, err.Error(), "invalid config: invalid TOML", "the message must not stack two redundant prefixes")
 		assert.False(t, env.FileExists(env.StarshipPath), "an invalid theme must never be applied")
 	})
 

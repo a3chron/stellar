@@ -979,6 +979,28 @@ func (h *MockAPIHandler) SeedThemeDraft(owner, slug string, name *string) string
 	return code
 }
 
+// SeedVersionDraft seeds a version-kind draft for an existing published
+// theme (identified by slug, under owner) with a config already set but no
+// version - as if the version field had been cleared on the web - so tests
+// can exercise the CLI's interactive fill-in-missing-field flow for
+// "version" alone, without "config" also showing up in missing and short-
+// circuiting it first. Returns the draft's code.
+func (h *MockAPIHandler) SeedVersionDraft(owner, slug string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	code := h.nextDraftCode()
+	now := time.Now().UTC()
+	cfg := "format = \"$all\"\n"
+	src := "cli"
+	h.drafts[code] = &mockDraft{
+		code: code, kind: "version", owner: owner, themeSlug: slug,
+		config: &cfg, configSource: &src,
+		createdAt: now, updatedAt: now, dependencies: []string{},
+	}
+	return code
+}
+
 // DraftCount returns how many live drafts username currently owns.
 func (h *MockAPIHandler) DraftCount(username string) int {
 	h.mu.Lock()

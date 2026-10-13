@@ -90,7 +90,7 @@ The credential is saved to credentials.json in your stellar home directory.`,
 
 var authLoginCmd = &cobra.Command{
 	Use:     "login",
-	Short:   "Log in to stellar-hub (same as `stellar auth`)",
+	Short:   "Log in to stellar-hub (same as \"stellar auth\")",
 	Args:    argsWithUsage(cobra.NoArgs),
 	Example: `  stellar auth login`,
 	RunE:    runAuthLogin,
@@ -116,7 +116,7 @@ var authStatusCmd = &cobra.Command{
 		}
 		cacheUsername(who.Username)
 
-		color.Green("Logged in as %s", loginLabel(who.Name, who.Username))
+		color.Green("✓ Logged in as %s", loginLabel(who.Name, who.Username))
 		if os.Getenv(paths.EnvToken) != "" {
 			color.HiBlack("(using STELLAR_TOKEN, not the stored credential)")
 		}
@@ -153,9 +153,9 @@ var authLogoutCmd = &cobra.Command{
 			if err := auth.Delete(baseURL); err != nil {
 				return err
 			}
-			color.Green("Logged out")
+			color.Green("✓ Logged out")
 		} else {
-			color.Yellow("Nothing stored for %s - nothing to log out of here.", baseURL)
+			color.Yellow("Not logged in to %s - nothing to log out of.", baseURL)
 		}
 
 		if os.Getenv(paths.EnvToken) != "" {
@@ -176,7 +176,7 @@ func runAuthLogin(cmd *cobra.Command, args []string) error {
 	if token, err := auth.Token(baseURL); err == nil && token != "" {
 		if who, werr := whoamiWithToken(token); werr == nil {
 			cacheUsername(who.Username)
-			color.Green("Already logged in as %s", loginLabel(who.Name, who.Username))
+			color.Green("✓ Already logged in as %s", loginLabel(who.Name, who.Username))
 			return nil
 		} else if !errors.Is(werr, api.ErrUnauthorized) {
 			// Anything other than "this token is no good" (offline, an older
@@ -206,9 +206,9 @@ func runAuthLogin(cmd *cobra.Command, args []string) error {
 		openBrowser(link)
 	}
 
-	color.Cyan("Waiting for you to approve in the browser...")
-
+	stop := startSpinner(color.CyanString("Waiting for you to approve in the browser..."))
 	token, name, username, err := pollForToken(start)
+	stop()
 	if err != nil {
 		return err
 	}

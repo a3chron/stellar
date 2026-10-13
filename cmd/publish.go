@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -67,7 +68,7 @@ func init() {
 	publishCmd.Flags().StringVar(&publishName, "name", "", "Theme display name (new themes only)")
 	publishCmd.Flags().StringVar(&publishDescription, "description", "", "Theme description")
 	publishCmd.Flags().StringVar(&publishGroup, "group", "", "Theme group/category")
-	publishCmd.Flags().StringVar(&publishColorMode, "color-mode", "", "dark, light, or both")
+	publishCmd.Flags().StringVar(&publishColorMode, "color-mode", "", "Color mode the theme is designed for: dark, light, or both")
 	publishCmd.Flags().StringArrayVar(&publishDeps, "dep", nil, "A dependency theme requires (repeatable)")
 	publishCmd.Flags().StringVar(&publishMinStarship, "min-starship", "", "Minimum starship version required (X.Y.Z)")
 	publishCmd.Flags().StringVar(&publishScreenshot, "screenshot", "", "Path to a screenshot (PNG/JPEG/WebP, max 4MB)")
@@ -316,6 +317,19 @@ func resolvePublishSource(r *bufio.Reader, interactive bool, arg string) (*publi
 		return nil, merr
 	}
 	if len(matches) == 0 {
+		// `new`/`fork` normalize a theme's name to slug form (lowercase,
+		// dashes) before ever creating its directory, so a bare name typed
+		// the way it was BEFORE normalization (e.g. "My_Theme" for a theme
+		// actually saved as "my-theme") would otherwise find nothing even
+		// though the theme is right there under its normalized name.
+		if normalized := normalizeSlug(arg); normalized != "" && normalized != arg {
+			matches, merr = findLocalThemeDirsByName(normalized)
+			if merr != nil {
+				return nil, merr
+			}
+		}
+	}
+	if len(matches) == 0 {
 		return nil, fmt.Errorf("%q is not a path, a cached author/slug, or a theme name under your stellar cache", arg)
 	}
 
@@ -508,7 +522,7 @@ func loadAndCheckConfig(path string) (string, theme.ValidationResult, error) {
 		return "", theme.ValidationResult{}, fmt.Errorf("validation error: %w", verr)
 	}
 	if !result.Valid {
-		return "", theme.ValidationResult{}, fmt.Errorf("invalid config: %w", result.Error)
+		return "", theme.ValidationResult{}, result.Error
 	}
 
 	n := utf16Length(content)
@@ -561,6 +575,46 @@ func normalizeUserPath(raw string) string {
 		}
 	}
 	return s
+}
+
+// maxScreenshotPromptAttempts caps how many times the interactive
+// screenshot-path prompt retries a bad answer (missing file, wrong
+// type/extension, too large) before giving up - a typo'd path shouldn't end
+// the whole publish run on the first try, but it also shouldn't loop
+// forever: after this many bad paths in a row, the error itself (naming
+// --screenshot) is more useful than another prompt.
+const maxScreenshotPromptAttempts = 3
+
+// promptForScreenshotWithRetries asks for a screenshot path, uploads it, and
+// retries on a bad path (loadScreenshot failing) up to
+// maxScreenshotPromptAttempts times - printing the problem each time so a
+// typo doesn't read as the prompt silently re-asking the same question. A
+// hub-side upload failure (wrapHubAPIError) is not retried here: that's not
+// something a different local path would fix.
+func promptForScreenshotWithRetries(r *bufio.Reader, client *api.Client, code string) (*api.Draft, error) {
+	var lastErr error
+	for attempt := 1; attempt <= maxScreenshotPromptAttempts; attempt++ {
+		rawPath, err := promptText(r, "Path to a screenshot (PNG/JPEG/WebP, max 4MB)", "", "--screenshot <path>")
+		if err != nil {
+			return nil, err
+		}
+		path := normalizeUserPath(rawPath)
+		data, lerr := loadScreenshot(path)
+		if lerr != nil {
+			lastErr = lerr
+			if attempt < maxScreenshotPromptAttempts {
+				color.Yellow("%v", lerr)
+				continue
+			}
+			return nil, lastErr
+		}
+		updated, uerr := client.UploadScreenshot(code, filepath.Base(path), data)
+		if uerr != nil {
+			return nil, wrapHubAPIError(uerr)
+		}
+		return updated, nil
+	}
+	return nil, lastErr
 }
 
 // --- identity ----------------------------------------------------------------
@@ -721,6 +775,28 @@ func maxThemeVersion(versions []api.VersionInfo) string {
 		}
 	}
 	return best
+}
+
+// suggestNextVersion returns a sensible default for the version prompt when
+// a version draft is missing one: the latest published version with its
+// minor component bumped by one (mirroring how the hub itself defaults a
+// new version draft's version field), e.g. "1.2" -> "1.3". Returns "" for
+// anything it can't parse as "X.Y" (including an empty latest - a draft for
+// a theme with no versions yet, or a hub that didn't send one), which
+// promptText then treats as "no default" rather than offering a bogus one.
+func suggestNextVersion(latest string) string {
+	major, minor, ok := strings.Cut(latest, ".")
+	if !ok {
+		return ""
+	}
+	n, err := strconv.Atoi(minor)
+	if err != nil {
+		return ""
+	}
+	if _, err := strconv.Atoi(major); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%s.%d", major, n+1)
 }
 
 // titleCase turns a slug ("my-cool-theme") into a readable default display
@@ -1253,18 +1329,9 @@ func fillMissingForPublish(r *bufio.Reader, interactive bool, client *api.Client
 			if !interactive {
 				return d, fmt.Errorf("draft %s is missing a screenshot; re-run with --screenshot <path>", term.SanitizeForTerminal(d.Code))
 			}
-			rawPath, err := promptText(r, "Path to a screenshot (PNG/JPEG/WebP, max 4MB)", "", "--screenshot <path>")
-			if err != nil {
-				return d, err
-			}
-			path := normalizeUserPath(rawPath)
-			data, lerr := loadScreenshot(path)
-			if lerr != nil {
-				return d, lerr
-			}
-			updated, uerr := client.UploadScreenshot(d.Code, filepath.Base(path), data)
-			if uerr != nil {
-				return d, wrapHubAPIError(uerr)
+			updated, serr := promptForScreenshotWithRetries(r, client, d.Code)
+			if serr != nil {
+				return d, serr
 			}
 			d = updated
 
@@ -1278,7 +1345,11 @@ func fillMissingForPublish(r *bufio.Reader, interactive bool, client *api.Client
 			if !interactive {
 				return d, fmt.Errorf("draft %s is missing a version; re-run with --version <version>", term.SanitizeForTerminal(d.Code))
 			}
-			v, err := promptText(r, "Version", "", "--version <version>")
+			def := ""
+			if d.Theme != nil {
+				def = suggestNextVersion(d.Theme.LatestVersion)
+			}
+			v, err := promptText(r, "Version", def, "--version <version>")
 			if err != nil {
 				return d, err
 			}

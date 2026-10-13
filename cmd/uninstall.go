@@ -37,12 +37,13 @@ var uninstallCmd = &cobra.Command{
 
 This detaches your prompt first: if starship.toml is a symlink into stellar's
 cache, it is replaced by a plain copy of the theme you have applied, so your
-prompt keeps working after the cache is gone. Then the stellar directory
+prompt keeps working after the cache is gone. Then it logs this machine out
+of stellar-hub (unless --keep-config is given), and the stellar directory
 (cache, config and the backups of your original starship.toml) and the
 stellar binary itself are removed.
 
-Use --keep-config to keep ~/.config/stellar (themes, backups, config) and
-remove only the binary.`,
+Use --keep-config to keep ~/.config/stellar (themes, backups, config,
+credentials) and stay logged in to stellar-hub, removing only the binary.`,
 	Example: `  stellar uninstall
   stellar uninstall --yes
   stellar uninstall --keep-config`,
@@ -146,7 +147,7 @@ remove only the binary.`,
 			fmt.Printf("Removed %s.\n", execPath)
 		}
 
-		color.Green("stellar has been uninstalled. Thanks for trying it!")
+		color.Green("✓ stellar has been uninstalled. Thanks for trying it!")
 		if runtime.GOOS == "windows" {
 			fmt.Println("The install directory is still on your user PATH; the uninstall.ps1 script removes that entry.")
 		}
@@ -315,5 +316,5 @@ func removeSelf(execPath string) (leftover string) {
 
 func init() {
 	uninstallCmd.Flags().BoolVarP(&uninstallYes, "yes", "y", false, "Skip the confirmation prompt")
-	uninstallCmd.Flags().BoolVar(&uninstallKeepConfig, "keep-config", false, "Keep ~/.config/stellar (themes, backups, config); remove only the binary")
+	uninstallCmd.Flags().BoolVar(&uninstallKeepConfig, "keep-config", false, "Keep ~/.config/stellar (themes, backups, config, credentials) and stay logged in to stellar-hub; remove only the binary")
 }

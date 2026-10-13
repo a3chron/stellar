@@ -81,10 +81,10 @@ remove the currently applied theme.`,
 			color.Yellow("Nothing to clean")
 		}
 		if result.DownloadedRemoved > 0 {
-			color.Green("Removed %d downloaded theme(s)", result.DownloadedRemoved)
+			color.Green("✓ Removed %d downloaded theme(s)", result.DownloadedRemoved)
 		}
 		if result.OwnRemoved > 0 {
-			color.Green("Removed %d of your own theme(s)", result.OwnRemoved)
+			color.Green("✓ Removed %d of your own theme(s)", result.OwnRemoved)
 		}
 
 		if !cleanAll && cfg.CurrentTheme != "" {
@@ -104,6 +104,6 @@ remove the currently applied theme.`,
 func init() {
 	cleanCmd.Flags().BoolVar(&cleanAll, "all", false, "Also remove the currently applied theme")
 	cleanCmd.Flags().BoolVar(&cleanIncludeOwn, "include-own", false,
-		"Also remove your own themes (hand-made, or from new/fork) - never your config backups, which only stellar remove <username>/backup removes")
+		"Also remove your own themes (hand-made, or from new/fork) - never your config backups, which only \"stellar remove <username>/backup\" removes")
 	cleanCmd.Flags().BoolVarP(&cleanYes, "yes", "y", false, "Skip the confirmation before removing your own themes")
 }

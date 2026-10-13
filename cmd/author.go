@@ -28,21 +28,58 @@ func cachedAuthor() string {
 }
 
 // splitAuthoredName parses "[author/]name": a bare name uses cachedAuthor()
-// for the author. Both segments must be valid theme-identifier segments
-// (letters, digits, '_', '-').
-func splitAuthoredName(arg string) (author, name string, err error) {
+// for the author. The author segment must be a valid theme-identifier
+// segment (letters, digits, '_', '-') and is kept exactly as typed; the name
+// segment is normalized to the hub's slug form (see
+// normalizeDestinationName) - `stellar publish` would force it into that
+// shape anyway, so a local theme might as well be named that way from the
+// start. normalized reports whether name differs from what was actually
+// typed, so a caller can tell the user when that happened.
+func splitAuthoredName(arg string) (author, name string, normalized bool, err error) {
+	var rawName string
 	if slash := strings.IndexByte(arg, '/'); slash >= 0 {
-		author, name = arg[:slash], arg[slash+1:]
+		author, rawName = arg[:slash], arg[slash+1:]
 	} else {
-		author, name = cachedAuthor(), arg
+		author, rawName = cachedAuthor(), arg
 	}
 
-	if !theme.IsValidSegment(author) || !theme.IsValidSegment(name) {
-		return "", "", fmt.Errorf(
-			"invalid theme name %q (author and name may contain only letters, digits, '_' and '-')", arg,
+	if !theme.IsValidSegment(author) {
+		return "", "", false, fmt.Errorf(
+			"invalid author %q (may contain only letters, digits, '_' and '-')", author,
 		)
 	}
-	return author, name, nil
+
+	name, err = normalizeDestinationName(rawName)
+	if err != nil {
+		return "", "", false, err
+	}
+	return author, name, name != rawName, nil
+}
+
+// normalizeDestinationName applies normalizeSlug (cmd/publish.go) to a
+// `new`/`fork` destination's theme-name segment, so a locally-created theme
+// is always named the way the hub itself would require it to be named on
+// publish (lowercase letters, digits and dashes) - rather than letting it
+// diverge under a name `stellar publish` would reject or rewrite later.
+// Returns an error if nothing usable survives normalization, or if the
+// result is the reserved "backup" name.
+func normalizeDestinationName(raw string) (string, error) {
+	name := normalizeSlug(raw)
+	if name == "" {
+		return "", fmt.Errorf("%q doesn't leave anything usable as a theme name (lowercase letters, digits and dashes)", raw)
+	}
+	if name == theme.BackupThemeName {
+		return "", fmt.Errorf("%q is reserved for stellar's own config backups - pick another name", name)
+	}
+	return name, nil
+}
+
+// normalizedNameNotice is the dim note shown whenever a `new`/`fork`
+// destination's typed name didn't survive normalization unchanged - so the
+// user isn't left wondering why the theme landed under a different name
+// than what they typed.
+func normalizedNameNotice(identifier string) string {
+	return fmt.Sprintf("Saved as %s (theme names are lowercase with dashes, like on the hub)", identifier)
 }
 
 // ensureFreshThemeDir refuses when dir already holds anything. `new` and

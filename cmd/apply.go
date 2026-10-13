@@ -183,7 +183,7 @@ var applyCmd = &cobra.Command{
 						if latestVersion != localVer {
 							color.Yellow("Update available: %s -> %s", localVer, latestVersion)
 						} else {
-							color.Green("Already on the latest version (%s)", latestVersion)
+							color.Green("✓ Already on the latest version (%s)", latestVersion)
 						}
 					}
 
@@ -230,7 +230,7 @@ var applyCmd = &cobra.Command{
 				return fmt.Errorf("validation error: %w", err)
 			}
 			if !validationResult.Valid {
-				return fmt.Errorf("invalid config: %w", validationResult.Error)
+				return validationResult.Error
 			}
 
 			// Check for custom commands and warn user
@@ -309,9 +309,9 @@ var applyCmd = &cobra.Command{
 		}
 
 		if alreadyCurrent {
-			color.Green("Already applied (refreshed): %s", t)
+			color.Green("✓ Already applied (refreshed): %s", t)
 		} else {
-			color.Green("Applied %s", t)
+			color.Green("✓ Applied %s", t)
 		}
 
 		warnPostApplyEnvironment()

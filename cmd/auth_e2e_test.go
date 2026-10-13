@@ -252,6 +252,22 @@ func TestE2E_AuthLogout(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestE2E_AuthLogoutNothingStored guards review item 8: logging out with
+// nothing stored used to read "Nothing stored for ... - nothing to log out
+// of here.", repeating "nothing" twice in one sentence.
+func TestE2E_AuthLogoutNothingStored(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+	resetFlags()
+	mockAPI := testutil.CreateDefaultMockAPI()
+	env.SetupMockAPI(mockAPI)
+
+	out, err := runStellar(t, nil, "auth", "logout")
+	require.NoError(t, err)
+	assert.Contains(t, out, "Not logged in to")
+	assert.Contains(t, out, "nothing to log out of.")
+	assert.NotContains(t, out, "Nothing stored for")
+}
+
 // TestE2E_AuthHubTooOld is the test Kurt's rollout-plan addendum asked for:
 // against a hub deployment that predates CLI publishing (SetLegacyHub),
 // every new-endpoint call must report a clear "doesn't support CLI

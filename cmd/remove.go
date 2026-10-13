@@ -143,7 +143,7 @@ func removeAllVersions(t *theme.Theme, cfg *config.Config) error {
 		}
 	}
 
-	color.Green("Removed all versions: %s/%s", t.Author, t.Name)
+	color.Green("✓ Removed all versions: %s/%s", t.Author, t.Name)
 
 	// If current theme was in this directory, update config
 	if currentThemeInDir {
@@ -200,7 +200,7 @@ func removeSpecificVersion(t *theme.Theme, cfg *config.Config) error {
 		}
 	}
 
-	color.Green("Removed: %s", themeID)
+	color.Green("✓ Removed: %s", themeID)
 
 	// If it was the current theme, update config
 	if themeID == cfg.CurrentTheme {

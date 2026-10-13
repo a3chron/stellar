@@ -9,7 +9,6 @@ import (
 
 	"github.com/a3chron/stellar/internal/config"
 	"github.com/a3chron/stellar/internal/paths"
-	"github.com/a3chron/stellar/internal/theme"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
@@ -33,17 +32,18 @@ var newCmd = &cobra.Command{
 and later publish with "stellar publish".
 
 Without an author prefix, the theme is created under your logged-in username
-(or your OS username if you haven't run "stellar auth" yet).`,
+(or your OS username if you haven't run "stellar auth" yet). The theme name
+is normalized to the hub's slug form (lowercase, dashes) - "My Theme" and
+"my_theme" both become "my-theme" - so a later "stellar publish" never has
+to rename it.`,
 	Example: `  stellar new my-theme
-  stellar new a3chron/my-theme`,
+  stellar new a3chron/my-theme
+  stellar new "My Cool Theme"   # saved as my-cool-theme`,
 	Args: argsWithUsage(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		author, name, err := splitAuthoredName(args[0])
+		author, name, normalized, err := splitAuthoredName(args[0])
 		if err != nil {
 			return err
-		}
-		if name == theme.BackupThemeName {
-			return fmt.Errorf("%q is reserved for stellar's own config backups - pick another name", name)
 		}
 
 		path, err := paths.ThemeCachePath(author, name, "1.0")
@@ -80,7 +80,10 @@ Without an author prefix, the theme is created under your logged-in username
 			color.Yellow("Warning: couldn't record %s as authored (stellar clean may remove it): %v", identifier, err)
 		}
 
-		color.Green("Created %s", identifier)
+		color.Green("✓ Created %s", identifier)
+		if normalized {
+			color.HiBlack(normalizedNameNotice(identifier))
+		}
 		fmt.Printf("  %s\n", path)
 		fmt.Println()
 		color.Cyan("Next steps:")

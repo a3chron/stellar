@@ -146,7 +146,8 @@ func TestE2E_PublishInvalidTOML(t *testing.T) {
 
 	_, err := runStellar(t, nil, "publish", path, "--yes")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid")
+	assert.Contains(t, err.Error(), "invalid TOML")
+	assert.NotContains(t, err.Error(), "invalid config: invalid TOML", "the message must not stack two redundant prefixes")
 }
 
 func TestE2E_PublishScreenshotTooLarge(t *testing.T) {
@@ -388,6 +389,20 @@ func TestE2E_PublishLooseTomlUsesFileStem(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "catppuccin")
 	assert.NotContains(t, out, "/downloads")
+}
+
+// TestE2E_PublishBareNameFallsBackToNormalizedSlug guards the revised review
+// item 7: `new`/`fork` always save a theme under its normalized slug-form
+// name now, so a bare-name publish lookup must also try the normalized form
+// when the name exactly as typed finds nothing - typing a theme's name "the
+// way you think of it" (mixed case, underscores) must still find it.
+func TestE2E_PublishBareNameFallsBackToNormalizedSlug(t *testing.T) {
+	env, _ := setupPublishEnv(t)
+	env.CreateThemeFile("testuser", "my-cool-theme", "1.0", testutil.SampleTOML())
+
+	out, err := runStellar(t, nil, "publish", "My_Cool_Theme", "--yes")
+	require.NoError(t, err)
+	assert.Contains(t, out, "my-cool-theme")
 }
 
 // TestE2E_PublishDirectoryPicksVersionedTomlOverOthers guards review item

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/a3chron/stellar/internal/config"
+	"github.com/a3chron/stellar/internal/symlink"
 	"github.com/a3chron/stellar/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -50,6 +51,92 @@ func TestE2E_New(t *testing.T) {
 		out, err := runStellar(t, nil, "new", "solo-theme")
 		require.NoError(t, err)
 		assert.Contains(t, out, "cacheduser/solo-theme")
+	})
+}
+
+// TestE2E_NewAndForkNormalizeDestinationName guards the revised review item
+// 7: a `new`/`fork` destination's theme-NAME segment is normalized to the
+// hub's slug form (lowercase, dashes) via the same normalizeSlug publish
+// uses - the author segment is kept exactly as typed - and a dim note is
+// printed only when normalization actually changed something.
+func TestE2E_NewAndForkNormalizeDestinationName(t *testing.T) {
+	t.Run("new normalizes the name but keeps the author as typed", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		out, err := runStellar(t, nil, "new", "Me/My_Cool_Theme")
+		require.NoError(t, err)
+		assert.Contains(t, out, "Me/my-cool-theme")
+		assert.Contains(t, out, "Saved as Me/my-cool-theme")
+
+		path := filepath.Join(env.StellarDir, "Me", "my-cool-theme", "1.0.toml")
+		assert.True(t, env.FileExists(path))
+
+		cfg, cerr := config.Load()
+		require.NoError(t, cerr)
+		assert.True(t, cfg.HasAuthored("Me/my-cool-theme"))
+	})
+
+	t.Run("new prints no note when the name was already slug-form", func(t *testing.T) {
+		testutil.SetupTestEnv(t)
+		resetFlags()
+
+		out, err := runStellar(t, nil, "new", "me/already-fine")
+		require.NoError(t, err)
+		assert.NotContains(t, out, "Saved as")
+	})
+
+	t.Run("fork normalizes an explicit destination name", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+
+		out, err := runStellar(t, nil, "fork", "testuser/sample-theme@1.2", "My Blue Theme")
+		require.NoError(t, err)
+		assert.Contains(t, out, "my-blue-theme")
+		assert.Contains(t, out, "Saved as")
+
+		cachedAuthor := symlink.BackupAuthor()
+		path := filepath.Join(env.StellarDir, cachedAuthor, "my-blue-theme", "1.0.toml")
+		assert.True(t, env.FileExists(path))
+	})
+
+	t.Run("fork with no destination normalizes the source's own name if needed", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		env.CreateConfig(`{"username": "me"}`)
+		// A local-only theme whose folder name was never forced through
+		// slug normalization (it never went through new/fork/publish).
+		env.CreateThemeFile("local", "Weird_Name", "1.0", testutil.SampleTOML())
+
+		out, err := runStellar(t, nil, "fork", "local/Weird_Name@1.0")
+		require.NoError(t, err)
+		assert.Contains(t, out, "me/weird-name")
+
+		path := filepath.Join(env.StellarDir, "me", "weird-name", "1.0.toml")
+		assert.True(t, env.FileExists(path))
+	})
+
+	t.Run("new errors when nothing survives normalization", func(t *testing.T) {
+		testutil.SetupTestEnv(t)
+		resetFlags()
+
+		_, err := runStellar(t, nil, "new", "me/___")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "doesn't leave anything usable")
+	})
+
+	t.Run("fork errors when the normalized destination is the reserved backup name", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+		env.CreateConfig(`{"username": "me"}`)
+
+		_, err := runStellar(t, nil, "fork", "testuser/sample-theme@1.2", "me/BACKUP")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "backup")
 	})
 }
 
@@ -374,6 +461,21 @@ func TestE2E_NewAndFork_ConfigLoadErrorDoesNotWipeIt(t *testing.T) {
 		raw := env.ReadFile(filepath.Join(env.StellarDir, "config.json"))
 		assert.Equal(t, `{not valid json`, raw)
 	})
+}
+
+// TestE2E_ForkInvalidTOMLDoesNotStackErrorPrefixes guards review item 2: the
+// error used to read "invalid config: invalid TOML: ...", stacking two
+// redundant prefixes - validationResult.Error already says "invalid TOML:
+// ...", so wrapping it again added nothing but noise.
+func TestE2E_ForkInvalidTOMLDoesNotStackErrorPrefixes(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+	resetFlags()
+	env.CreateThemeFile("local", "broken", "1.0", testutil.InvalidTOML())
+
+	_, err := runStellar(t, nil, "fork", "local/broken@1.0", "me/copy")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid TOML")
+	assert.NotContains(t, err.Error(), "invalid config: invalid TOML")
 }
 
 func TestWriteNewThemeFileNeverOverwrites(t *testing.T) {

@@ -47,19 +47,29 @@ func readLine(r *bufio.Reader) (line string, ok bool, err error) {
 	return trimmed, true, nil
 }
 
-// noAnswerError is the error every prompt helper returns when it can't get
-// an answer at all: stdin hit EOF with nothing read, or stdin isn't a
-// terminal and there is no default to fall back to. flagHint names the exact
-// flag (with its value placeholder, e.g. "--name <name>") the caller should
-// pass instead.
+// noAnswerError is the error every prompt helper returns when stdin hit EOF
+// with absolutely nothing read at all - nobody (and no script) was there to
+// answer. flagHint names the exact flag (with its value placeholder, e.g.
+// "--name <name>") the caller should pass instead.
 func noAnswerError(flagHint string) error {
 	return fmt.Errorf("no answer on stdin; re-run with %s", flagHint)
 }
 
+// requiredFieldError is what a required (no-default) prompt returns instead
+// of noAnswerError when stdin DID deliver a line - a real terminal where the
+// user just pressed Enter, or a script that piped an explicit blank line -
+// but it was empty. "no answer on stdin" would be actively misleading there:
+// stdin answered just fine, the answer was simply blank, which a required
+// field can't accept.
+func requiredFieldError(flagHint string) error {
+	return fmt.Errorf("a value is required; re-run with %s", flagHint)
+}
+
 // promptText asks prompt (shown with "[def]" when def is non-empty) and
-// returns the typed line, or def if the user presses Enter with no input. An
-// empty line with no default, or stdin hitting EOF with nothing typed at
-// all, is reported as noAnswerError(flagHint).
+// returns the typed line, or def if the user presses Enter with no input. A
+// blank answer with no default is reported as requiredFieldError(flagHint)
+// when stdin actually delivered a line (tty or not), or noAnswerError
+// (flagHint) when stdin hit EOF with nothing read at all.
 func promptText(r *bufio.Reader, prompt, def, flagHint string) (string, error) {
 	if def != "" {
 		fmt.Printf("%s [%s]: ", prompt, def)
@@ -71,9 +81,12 @@ func promptText(r *bufio.Reader, prompt, def, flagHint string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !ok || strings.TrimSpace(line) == "" {
+	if strings.TrimSpace(line) == "" {
 		if def != "" {
 			return def, nil
+		}
+		if ok {
+			return "", requiredFieldError(flagHint)
 		}
 		return "", noAnswerError(flagHint)
 	}
@@ -84,7 +97,8 @@ func promptText(r *bufio.Reader, prompt, def, flagHint string) (string, error) {
 // (0-based) index. defaultIndex is shown as the bracketed default and is
 // returned when the user presses Enter with no input; pass -1 when there is
 // no safe default, which turns a blank/missing answer into
-// noAnswerError(flagHint) instead.
+// requiredFieldError(flagHint) (stdin delivered an empty line) or
+// noAnswerError(flagHint) (stdin hit EOF with nothing read at all) instead.
 func promptSelect(r *bufio.Reader, prompt string, options []string, defaultIndex int, flagHint string) (int, error) {
 	for i, opt := range options {
 		fmt.Printf("  %d) %s\n", i+1, opt)
@@ -102,9 +116,12 @@ func promptSelect(r *bufio.Reader, prompt string, options []string, defaultIndex
 		return -1, err
 	}
 	trimmed := strings.TrimSpace(line)
-	if !ok || trimmed == "" {
+	if trimmed == "" {
 		if hasDefault {
 			return defaultIndex, nil
+		}
+		if ok {
+			return -1, requiredFieldError(flagHint)
 		}
 		return -1, noAnswerError(flagHint)
 	}

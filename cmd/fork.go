@@ -28,7 +28,8 @@ can edit it freely without touching the original.
 Fetches from stellar-hub first (resolving "latest" the same way "stellar
 apply" does), falling back to your local cache if the hub can't be reached.
 Without a destination name, the theme keeps its slug under your logged-in
-(or OS) username.`,
+(or OS) username. Either way, the destination's theme name is normalized to
+the hub's slug form (lowercase, dashes).`,
 	Example: `  stellar fork a3chron/ctp-blue my-blue
   stellar fork a3chron/ctp-blue@1.2
   stellar fork a3chron/ctp-blue a3chron/my-blue`,
@@ -42,15 +43,25 @@ Without a destination name, the theme keeps its slug under your logged-in
 			return err
 		}
 
-		author, name := cachedAuthor(), t.Name
+		author := cachedAuthor()
+		var name string
+		normalized := false
 		if len(args) == 2 {
-			author, name, err = splitAuthoredName(args[1])
+			author, name, normalized, err = splitAuthoredName(args[1])
 			if err != nil {
 				return err
 			}
-		}
-		if name == theme.BackupThemeName {
-			return fmt.Errorf("%q is reserved for stellar's own config backups - pick another name", name)
+		} else {
+			// No destination given: the fork keeps the source's own slug,
+			// still run through the same normalization - a source that only
+			// ever existed locally (never published) isn't guaranteed to
+			// already be in slug form.
+			var nerr error
+			name, nerr = normalizeDestinationName(t.Name)
+			if nerr != nil {
+				return nerr
+			}
+			normalized = name != t.Name
 		}
 
 		destPath, err := paths.ThemeCachePath(author, name, "1.0")
@@ -138,7 +149,7 @@ Without a destination name, the theme keeps its slug under your logged-in
 			return fmt.Errorf("validation error: %w", verr)
 		}
 		if !validationResult.Valid {
-			return fmt.Errorf("invalid config: %w", validationResult.Error)
+			return validationResult.Error
 		}
 
 		// fork writes the content straight into a theme the user now owns,
@@ -188,7 +199,10 @@ Without a destination name, the theme keeps its slug under your logged-in
 			color.Yellow("Warning: couldn't record %s as authored (stellar clean may remove it): %v", destID, err)
 		}
 
-		color.Green("Forked %s -> %s", t, destID)
+		color.Green("✓ Forked %s -> %s", t, destID)
+		if normalized {
+			color.HiBlack(normalizedNameNotice(destID))
+		}
 		fmt.Printf("  %s\n", destPath)
 		fmt.Println()
 		color.Cyan("Next steps:")
