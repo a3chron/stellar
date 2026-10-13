@@ -12,6 +12,7 @@ import (
 
 	"github.com/a3chron/stellar/internal/api"
 	"github.com/a3chron/stellar/internal/auth"
+	"github.com/a3chron/stellar/internal/cache"
 	"github.com/a3chron/stellar/internal/config"
 	"github.com/a3chron/stellar/internal/paths"
 	"github.com/a3chron/stellar/internal/symlink"
@@ -85,6 +86,10 @@ remove only the binary.`,
 		}
 		fmt.Printf("  - remove the binary %s\n", execPath)
 
+		if !uninstallKeepConfig {
+			printOwnThemesAndBackupsNotice(cfg)
+		}
+
 		if !uninstallYes {
 			ok, err := confirmUninstall(cmd.InOrStdin())
 			if err != nil {
@@ -139,6 +144,38 @@ remove only the binary.`,
 		}
 		return nil
 	},
+}
+
+// printOwnThemesAndBackupsNotice warns about what uninstalling (without
+// --keep-config) would take with it that stellar can't just re-download:
+// the user's own themes (same "own" definition `stellar clean` uses - see
+// cache.PlanClean) and their config backups. It's shown even with --yes,
+// purely as information the user may want before confirming (or before the
+// non-interactive run proceeds) - and stays quiet when there's nothing of
+// the user's own to mention, so a machine with only downloaded themes sees
+// no extra noise.
+func printOwnThemesAndBackupsNotice(cfg *config.Config) {
+	// All: true - uninstalling removes the whole directory regardless of
+	// what's currently applied, so the currently applied theme (if it's one
+	// of the user's own) must still be counted here, unlike `stellar
+	// clean`'s default of keeping it.
+	plan, err := cache.PlanClean(cache.CleanOptions{
+		All:        true,
+		Downloaded: cfg.DownloadedThemes,
+		Authored:   cfg.AuthoredThemes,
+	})
+	if err != nil || (len(plan.OwnThemes) == 0 && plan.BackupVersions == 0) {
+		return
+	}
+
+	color.Yellow("This will also delete:")
+	for _, ot := range plan.OwnThemes {
+		fmt.Printf("  %s (%d version(s))\n", ot.ID, ot.Versions)
+	}
+	if plan.BackupVersions > 0 {
+		fmt.Printf("  %d backup version(s)\n", plan.BackupVersions)
+	}
+	color.Cyan("Use --keep-config to keep these.")
 }
 
 // revokeStoredToken best-effort revokes the stellar-hub login stored for the
