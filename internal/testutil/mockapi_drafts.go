@@ -202,6 +202,22 @@ func stringSlicesEqual(a, b []string) bool {
 	return true
 }
 
+// themeVersionFloor returns the floor a new version of th must beat: the
+// numeric maximum of its latest existing version and the highest version
+// number ever deleted from it (th.HighestDeletedVersion) - mirroring the
+// hub's own rule that a deleted version number can never be reused. This is
+// also exactly what the contract calls a version draft's "highestVersion".
+func themeVersionFloor(th *MockTheme) string {
+	latest := maxMockVersion(th.Versions).Version
+	if th.HighestDeletedVersion == "" {
+		return latest
+	}
+	if latest == "" || compareMockVersions(th.HighestDeletedVersion, latest) > 0 {
+		return th.HighestDeletedVersion
+	}
+	return latest
+}
+
 // bumpMinorVersion returns the default next version for a new version draft:
 // (X+1).0 of latest, per the contract.
 func bumpMinorVersion(v string) string {
@@ -377,6 +393,7 @@ func (h *MockAPIHandler) draftShape(d *mockDraft, includeConfig bool) map[string
 			}
 			shape["theme"] = map[string]interface{}{
 				"slug": d.themeSlug, "name": th.Name, "latestVersion": latest,
+				"highestVersion": themeVersionFloor(th),
 			}
 			shape["unchangedFromLatest"] = h.unchangedFromLatest(d, th)
 		}
@@ -563,7 +580,11 @@ func (h *MockAPIHandler) handleCreateDraft(w http.ResponseWriter, r *http.Reques
 		code := h.nextDraftCode()
 		d := &mockDraft{code: code, kind: "version", owner: username, themeSlug: slug, createdAt: now, updatedAt: now}
 
-		nextVer := bumpMinorVersion(latest.Version)
+		// The default suggested version must beat the floor (latest existing
+		// OR highest-ever-deleted), never just the latest existing version -
+		// otherwise the hub would hand out a default that its own publish
+		// step would then reject as version_not_newer.
+		nextVer := bumpMinorVersion(themeVersionFloor(th))
 		if body.Version != nil && *body.Version != "" {
 			nextVer = *body.Version
 		}
@@ -938,8 +959,18 @@ func (h *MockAPIHandler) handlePublishDraft(w http.ResponseWriter, username, cod
 				return
 			}
 		}
-		if latest != "" && compareMockVersions(newVersion, latest) <= 0 {
-			writeJSONError(w, http.StatusBadRequest, "version_not_newer", "version must be newer than the latest", nil, map[string]string{"latest": latest})
+		// The floor a new version must beat is the numeric maximum of the
+		// latest existing version and the highest version ever deleted -
+		// details.latest always carries THAT floor (not necessarily the
+		// latest existing version), matching the hub: existing CLIs already
+		// suggest the next number from it, deleted-aware or not.
+		floor := themeVersionFloor(th)
+		if floor != "" && compareMockVersions(newVersion, floor) <= 0 {
+			msg := "version must be newer than the latest"
+			if latest == "" || compareMockVersions(floor, latest) > 0 {
+				msg = fmt.Sprintf("Version %s isn't newer than %s - it was deleted, and a deleted version number can't be used again", newVersion, floor)
+			}
+			writeJSONError(w, http.StatusBadRequest, "version_not_newer", msg, nil, map[string]string{"latest": floor})
 			return
 		}
 

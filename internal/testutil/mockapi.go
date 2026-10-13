@@ -23,6 +23,12 @@ type MockTheme struct {
 	Versions    []MockVersion
 	CreatedAt   string
 	UpdatedAt   string
+	// HighestDeletedVersion is the highest version number ever deleted from
+	// this theme (mirroring the hub's per-theme "delete a single version"
+	// floor) - empty means none ever was. The CLI itself never calls the
+	// delete route, so tests set this directly via SetHighestDeletedVersion
+	// rather than going through any mock HTTP endpoint.
+	HighestDeletedVersion string
 }
 
 // MockVersion represents a theme version
@@ -128,6 +134,22 @@ func (h *MockAPIHandler) AddTheme(theme MockTheme) {
 	key := themeKey(theme.Author, theme.Slug)
 	h.themes[key] = &theme
 	h.DownloadCounts[key] = theme.Downloads
+}
+
+// SetHighestDeletedVersion records version as the highest version number
+// ever deleted from the theme identified by author/slug, as a hub "delete a
+// single version" would leave behind. The CLI never calls that route itself,
+// so tests needing this floor (a version_not_newer check that must beat more
+// than just the latest existing version, or a draft's highestVersion field)
+// set it directly here instead of exercising a mock HTTP endpoint for it. A
+// no-op if the theme doesn't exist.
+func (h *MockAPIHandler) SetHighestDeletedVersion(author, slug, version string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if th, ok := h.themes[themeKey(author, slug)]; ok {
+		th.HighestDeletedVersion = version
+	}
 }
 
 // ServeHTTP implements http.Handler

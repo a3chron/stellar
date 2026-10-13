@@ -36,6 +36,48 @@ func TestSuggestNextVersion(t *testing.T) {
 	}
 }
 
+// TestFillMissingForPublish_VersionDefaultBeatsDeletedFloor covers the hub's
+// "delete a single version" feature end to end through the draft JSON: a
+// version draft's suggested default must beat the theme's HighestVersion
+// (latest existing OR highest-ever-deleted), not just its LatestVersion -
+// otherwise the default offered here would be the very number that was
+// deleted.
+func TestFillMissingForPublish_VersionDefaultBeatsDeletedFloor(t *testing.T) {
+	resetFlags()
+	env := testutil.SetupTestEnv(t)
+	mockAPI := testutil.CreateDefaultMockAPI()
+	env.SetupMockAPI(mockAPI)
+	// testuser/sample-theme's real latest is 1.2; 2.0 was since deleted from
+	// the hub, raising the floor above it.
+	mockAPI.SetHighestDeletedVersion("testuser", "sample-theme", "2.0")
+
+	// As if the version field had been cleared on the web: config set, no
+	// version - exactly what fillMissingForPublish's "version" case handles.
+	code := mockAPI.SeedVersionDraft("testuser", "sample-theme")
+	token := mockAPI.Token("testuser", "Test User")
+	client := api.NewAuthedClientWithURL(env.MockServer.URL, token)
+
+	d, err := client.GetDraft(code, false)
+	require.NoError(t, err)
+	require.Contains(t, d.Missing, "version")
+	require.NotNil(t, d.Theme)
+	assert.Equal(t, "1.2", d.Theme.LatestVersion)
+	assert.Equal(t, "2.0", d.Theme.HighestVersion)
+
+	r := bufio.NewReader(strings.NewReader("\n")) // accept the suggested default
+	var updated *api.Draft
+	out := testutil.CaptureOutput(t, func() {
+		updated, err = fillMissingForPublish(r, true, client, d)
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated.Version)
+	// 3.0 - the next major above the deleted 2.0, NOT 2.0 (the next major
+	// above the real latest existing version, 1.2 - which would just
+	// suggest the very number that was deleted).
+	assert.Equal(t, "3.0", *updated.Version)
+	assert.Contains(t, out, "Version [3.0]")
+}
+
 // TestPromptForScreenshotWithRetries guards review item 11: a bad screenshot
 // path (missing file, wrong type, too large) used to end the whole publish
 // run on the first try - it now retries up to maxScreenshotPromptAttempts

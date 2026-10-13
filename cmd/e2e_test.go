@@ -3222,6 +3222,45 @@ func TestE2E_ApplyUpdateAlreadyLatest(t *testing.T) {
 	assert.Contains(t, output, "Already on the latest version")
 }
 
+// TestE2E_ApplyUpdateCachedVersionWasDeleted covers A3C's "delete a single
+// version" hub feature: when the locally cached "latest" is numerically
+// HIGHER than what the hub now reports as latest, that cached version was
+// deleted from the hub (a theme's latest otherwise only ever moves forward).
+// "Update available: 2.0 -> 1.2" would misleadingly read as an upgrade, so
+// apply --update instead says plainly that the cached version is gone and
+// that it's switching to the hub's (now lower) latest - then still applies
+// it, exactly as the equal/greater cases already do.
+func TestE2E_ApplyUpdateCachedVersionWasDeleted(t *testing.T) {
+	testutil.RequireSymlinks(t)
+	env := testutil.SetupTestEnv(t)
+	resetFlags()
+
+	mockAPI := testutil.CreateDefaultMockAPI()
+	env.SetupMockAPI(mockAPI)
+	// testuser/sample-theme's real latest is 1.2; 2.0 was deleted from the
+	// hub after the cache below was written.
+	mockAPI.SetHighestDeletedVersion("testuser", "sample-theme", "2.0")
+
+	// Cache holds 2.0 - the since-deleted version - as "latest".
+	env.CreateThemeFile("testuser", "sample-theme", "2.0", testutil.SampleTOML())
+
+	var execErr error
+	output := testutil.CaptureOutput(t, func() {
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"apply", "--update", "testuser/sample-theme"})
+		cmd.SetOut(new(bytes.Buffer))
+		execErr = cmd.Execute()
+	})
+	require.NoError(t, execErr)
+	assert.Contains(t, output, "testuser/sample-theme@2.0 is no longer on stellar-hub - switching to its latest version, 1.2")
+	assert.NotContains(t, output, "Update available", "must not read like an upgrade")
+
+	// It still actually applies the hub's latest (1.2), exactly as the
+	// equal/greater cases do.
+	assert.True(t, env.IsSymlink(env.StarshipPath))
+	assert.True(t, strings.HasSuffix(env.ReadSymlink(env.StarshipPath), filepath.Join("testuser", "sample-theme", "1.2.toml")))
+}
+
 // =============================================================================
 // Info @version / Offline Fallback Tests
 // =============================================================================
