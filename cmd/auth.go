@@ -7,6 +7,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/a3chron/stellar/internal/api"
@@ -108,6 +109,9 @@ var authStatusCmd = &cobra.Command{
 		cacheUsername(who.Username)
 
 		color.Green("Logged in as %s (@%s)", displayName(who), term.SanitizeForTerminal(who.Username))
+		if os.Getenv(paths.EnvToken) != "" {
+			color.HiBlack("(using STELLAR_TOKEN, not the stored credential)")
+		}
 		return nil
 	},
 }
@@ -146,6 +150,10 @@ var authLogoutCmd = &cobra.Command{
 // runAuthLogin is shared by `stellar auth` and `stellar auth login`.
 func runAuthLogin(cmd *cobra.Command, args []string) error {
 	baseURL := authBaseURL()
+
+	if os.Getenv(paths.EnvToken) != "" {
+		color.Yellow("STELLAR_TOKEN is set and takes precedence over this login - unset it to use the new one.")
+	}
 
 	if token, err := auth.Token(baseURL); err == nil && token != "" {
 		if who, werr := whoamiWithToken(token); werr == nil {
@@ -205,6 +213,13 @@ func runAuthLogin(cmd *cobra.Command, args []string) error {
 // codes. There is deliberately no "press Enter to check now" path: a stdin
 // goroutine reading for that would race with (and could steal input from)
 // the very next prompt `stellar publish` shows when it logs in inline.
+// maxConsecutiveAuthTransportFailures bounds how many consecutive transport
+// failures (DNS hiccup, a dropped WiFi connection, ...) pollForToken rides
+// out before giving up - a single blip must not abort an otherwise-healthy
+// login, but a genuinely dead connection still has to fail eventually
+// rather than spin silently until the code itself expires.
+const maxConsecutiveAuthTransportFailures = 5
+
 func pollForToken(start *api.StartAuthResponse) (token, name, username string, err error) {
 	client := api.NewAuthedClient("")
 	interval := time.Duration(start.Interval) * time.Second
@@ -212,6 +227,8 @@ func pollForToken(start *api.StartAuthResponse) (token, name, username string, e
 		interval = 3 * time.Second
 	}
 	deadline := time.Now().Add(time.Duration(start.ExpiresIn) * time.Second)
+
+	consecutiveTransportFailures := 0
 
 	for {
 		if !time.Now().Before(deadline) {
@@ -224,6 +241,20 @@ func pollForToken(start *api.StartAuthResponse) (token, name, username string, e
 		if perr == nil {
 			return resp.Token, resp.User.Name, resp.User.Username, nil
 		}
+
+		// A transient transport failure (offline for a moment, a dropped
+		// connection) is not the same as the hub actively telling us
+		// something - keep polling through the deadline rather than aborting
+		// the whole login on one blip, but don't spin forever on a
+		// genuinely dead connection either.
+		if errors.Is(perr, api.ErrOffline) {
+			consecutiveTransportFailures++
+			if consecutiveTransportFailures >= maxConsecutiveAuthTransportFailures {
+				return "", "", "", fmt.Errorf("can't reach stellar-hub (are you offline?): %w", perr)
+			}
+			continue
+		}
+		consecutiveTransportFailures = 0
 
 		var apiErr *api.APIError
 		if errors.As(perr, &apiErr) {

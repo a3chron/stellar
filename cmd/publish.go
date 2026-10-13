@@ -162,12 +162,12 @@ func runPublish(cmd *cobra.Command, args []string) error {
 
 	draft, err = fillMissingForPublish(r, tty, client, draft)
 	if err != nil {
-		return err
+		return draftSavedHint(err, draft)
 	}
 
 	result, perr := client.PublishDraft(draft.Code)
 	if perr != nil {
-		return wrapHubAPIError(perr)
+		return draftSavedHint(wrapHubAPIError(perr), draft)
 	}
 
 	color.Green("✓ Published %s/%s@%s", result.Author, result.Slug, result.Version)
@@ -525,6 +525,21 @@ func normalizeVersionFlag(v string) string {
 	return strings.TrimPrefix(strings.TrimSpace(v), "v")
 }
 
+// maxThemeVersion returns the numeric maximum of versions, per the
+// contract's definition of "latest" ("the numeric maximum", not whichever
+// entry the hub happens to list first - GET /api/{author}/{slug} does order
+// by createdAt desc in practice, but relying on that would silently break if
+// a version were ever republished out of order).
+func maxThemeVersion(versions []api.VersionInfo) string {
+	best := ""
+	for _, v := range versions {
+		if best == "" || theme.CompareSemver(v.Version, best) > 0 {
+			best = v.Version
+		}
+	}
+	return best
+}
+
 // titleCase turns a slug ("my-cool-theme") into a readable default display
 // name ("My Cool Theme").
 func titleCase(slug string) string {
@@ -678,12 +693,15 @@ func statusAwarePrompt(d *api.Draft) string {
 	}
 }
 
-func confirmAttachToDraft(r *bufio.Reader, d *api.Draft, tty bool) (bool, error) {
+// confirmAttachToDraft asks before replacing an existing draft's config. Like
+// promptConfirmation elsewhere in this package, it always attempts the
+// prompt regardless of whether stdin looks like a terminal - a piped real
+// answer (`echo y | stellar publish ...`) still works; only a genuinely
+// missing answer (noAnswerError, from promptYesNo) turns into an error
+// naming --yes.
+func confirmAttachToDraft(r *bufio.Reader, d *api.Draft) (bool, error) {
 	if publishYes {
 		return true, nil
-	}
-	if !tty {
-		return false, fmt.Errorf("draft %s already matches this slug; re-run with --yes to replace its config, or --draft %s to be explicit", d.Code, d.Code)
 	}
 	return promptYesNo(r, statusAwarePrompt(d), false, false, "--yes")
 }
@@ -719,11 +737,17 @@ func promptWaitingDraftChoice(r *bufio.Reader, waiting []api.Draft) (chosen *api
 	return &waiting[idx], false, nil
 }
 
-// checkUnchanged confirms before keeping a version draft whose config,
-// dependencies and minStarshipVersion are all identical to the latest
-// published version - there is nothing to publish otherwise, so this is the
-// one place publish asks "are you sure" even for a newly created draft.
-func checkUnchanged(r *bufio.Reader, d *api.Draft, tty bool) (*api.Draft, error) {
+// checkUnchanged confirms before keeping a version draft whose config and
+// dependencies are identical to the latest published version - there is
+// nothing to publish otherwise, so this is the one place publish asks "are
+// you sure" even right after creating a draft.
+//
+// created distinguishes a draft this very call just made (declining it
+// deletes it again, best-effort, so a false start doesn't linger as a dead
+// draft blocking the next attempt) from one we merely attached to via PATCH
+// (declining leaves it exactly as it now is - its config was already
+// updated, so there is nothing left to roll back).
+func checkUnchanged(r *bufio.Reader, client *api.Client, d *api.Draft, created bool) (*api.Draft, error) {
 	if d.Kind != api.DraftKindVersion || !d.UnchangedFromLatest {
 		return d, nil
 	}
@@ -734,15 +758,20 @@ func checkUnchanged(r *bufio.Reader, d *api.Draft, tty bool) (*api.Draft, error)
 	if publishYes {
 		return d, nil
 	}
-	if !tty {
-		return nil, fmt.Errorf("nothing changed vs %s; re-run with --yes to keep this draft anyway", latest)
-	}
+
 	ok, err := promptYesNo(r, fmt.Sprintf("Nothing changed vs %s - keep this draft anyway?", latest), false, false, "--yes")
 	if err != nil {
+		if created {
+			_ = client.DeleteDraft(d.Code)
+		}
 		return nil, err
 	}
 	if !ok {
-		return nil, fmt.Errorf("aborted: config unchanged vs %s", latest)
+		if created {
+			_ = client.DeleteDraft(d.Code)
+			return nil, fmt.Errorf("aborted: config unchanged vs %s (draft %s was not kept)", latest, d.Code)
+		}
+		return nil, fmt.Errorf("aborted: config unchanged vs %s (draft %s was left as it was - its config had already been updated)", latest, d.Code)
 	}
 	return d, nil
 }
@@ -771,7 +800,7 @@ func resolveOrCreateDraft(r *bufio.Reader, tty bool, client *api.Client, me *api
 		if err != nil {
 			return nil, err
 		}
-		return checkUnchanged(r, d, tty)
+		return checkUnchanged(r, client, d, false)
 	}
 
 	drafts, err := client.ListDrafts()
@@ -780,7 +809,7 @@ func resolveOrCreateDraft(r *bufio.Reader, tty bool, client *api.Client, me *api
 	}
 
 	if match := findSlugMatchingDraft(drafts, slug); match != nil {
-		ok, cerr := confirmAttachToDraft(r, match, tty)
+		ok, cerr := confirmAttachToDraft(r, match)
 		if cerr != nil {
 			return nil, cerr
 		}
@@ -791,7 +820,7 @@ func resolveOrCreateDraft(r *bufio.Reader, tty bool, client *api.Client, me *api
 		if err != nil {
 			return nil, err
 		}
-		return checkUnchanged(r, d, tty)
+		return checkUnchanged(r, client, d, false)
 	}
 
 	existing, infoErr := api.NewClient().GetThemeInfo(me.Username, slug)
@@ -810,7 +839,7 @@ func resolveOrCreateDraft(r *bufio.Reader, tty bool, client *api.Client, me *api
 			if err != nil {
 				return nil, err
 			}
-			return checkUnchanged(r, d, tty)
+			return checkUnchanged(r, client, d, false)
 		}
 	}
 
@@ -818,10 +847,7 @@ func resolveOrCreateDraft(r *bufio.Reader, tty bool, client *api.Client, me *api
 		req := api.CreateDraftRequest{Kind: api.DraftKindVersion, ThemeSlug: &slug, Config: &content, Source: &source}
 		applyExplicitFlagsCreate(&req)
 
-		latest := ""
-		if len(existing.Versions) > 0 {
-			latest = existing.Versions[0].Version
-		}
+		latest := maxThemeVersion(existing.Versions)
 		switch {
 		case publishVersion != "":
 			v := normalizeVersionFlag(publishVersion)
@@ -835,7 +861,7 @@ func resolveOrCreateDraft(r *bufio.Reader, tty bool, client *api.Client, me *api
 		if cerr != nil {
 			return nil, wrapHubAPIError(cerr)
 		}
-		return checkUnchanged(r, d, tty)
+		return checkUnchanged(r, client, d, true)
 	}
 
 	req := api.CreateDraftRequest{Kind: api.DraftKindTheme, Slug: &slug, Config: &content, Source: &source}
@@ -853,14 +879,14 @@ func resolveOrCreateDraft(r *bufio.Reader, tty bool, client *api.Client, me *api
 
 	name := publishName
 	if name == "" {
+		// promptText already falls back to def (the title-cased slug) on a
+		// missing/blank answer regardless of whether stdin is a terminal -
+		// matching "a prompt with a title-cased default, else (no TTY) the
+		// title-cased slug" without a separate non-interactive branch.
 		def := titleCase(slug)
-		if tty {
-			name, err = promptText(r, "Theme name", def, "--name <name>")
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			name = def
+		name, err = promptText(r, "Theme name", def, "--name <name>")
+		if err != nil {
+			return nil, err
 		}
 	}
 	req.Name = &name
@@ -873,6 +899,24 @@ func resolveOrCreateDraft(r *bufio.Reader, tty bool, client *api.Client, me *api
 }
 
 // --- output and --publish finalization ---------------------------------------
+
+// draftSavedHint appends a "the draft is still there" hint to err whenever
+// --publish fails after the draft itself already exists (filling in a
+// missing field, or the final publish call) - the draft isn't lost just
+// because finishing it in one command didn't work, so the user still needs
+// the link back to it. The hint deliberately uses a plain URL (no OSC 8/
+// color escapes) rather than term.Hyperlink: it's nested inside the
+// hint-rendering machinery's own coloring, and most modern terminals
+// linkify a bare URL on their own anyway (see internal/term/hyperlink.go).
+func draftSavedHint(err error, d *api.Draft) error {
+	if err == nil || d == nil {
+		return err
+	}
+	return newHintedError(err.Error(), hint{
+		label:  "Draft saved",
+		values: []string{fmt.Sprintf("%s is saved - finish it on the hub: %s", d.Code, d.URL)},
+	})
+}
 
 func printDraftSummary(d *api.Draft) {
 	name := d.Code
@@ -910,6 +954,11 @@ func printDraftSummary(d *api.Draft) {
 // --publish can finalize it: an explicit flag is used if given, otherwise an
 // interactive prompt (TTY only) - a non-interactive run without the right
 // flag errors out naming it instead of guessing.
+//
+// On every error path this still returns the most recent *api.Draft it has
+// (never nil) alongside the error, so the caller can always point the user
+// back at the draft - which still exists on the hub regardless of why
+// filling it in failed - instead of leaving them with nothing but an error.
 func fillMissingForPublish(r *bufio.Reader, tty bool, client *api.Client, d *api.Draft) (*api.Draft, error) {
 	if len(d.Missing) == 0 {
 		return d, nil
@@ -928,7 +977,7 @@ func fillMissingForPublish(r *bufio.Reader, tty bool, client *api.Client, d *api
 				continue
 			}
 			if !tty {
-				return nil, fmt.Errorf("draft %s is missing a name; re-run with --name <name>", d.Code)
+				return d, fmt.Errorf("draft %s is missing a name; re-run with --name <name>", d.Code)
 			}
 			def := ""
 			if d.Slug != nil {
@@ -936,26 +985,26 @@ func fillMissingForPublish(r *bufio.Reader, tty bool, client *api.Client, d *api
 			}
 			name, err := promptText(r, "Theme name", def, "--name <name>")
 			if err != nil {
-				return nil, err
+				return d, err
 			}
 			patch.Name = &name
 			changed = true
 
 		case "screenshot":
 			if !tty {
-				return nil, fmt.Errorf("draft %s is missing a screenshot; re-run with --screenshot <path>", d.Code)
+				return d, fmt.Errorf("draft %s is missing a screenshot; re-run with --screenshot <path>", d.Code)
 			}
 			path, err := promptText(r, "Path to a screenshot (PNG/JPEG/WebP, max 4MB)", "", "--screenshot <path>")
 			if err != nil {
-				return nil, err
+				return d, err
 			}
 			data, lerr := loadScreenshot(path)
 			if lerr != nil {
-				return nil, lerr
+				return d, lerr
 			}
 			updated, uerr := client.UploadScreenshot(d.Code, data)
 			if uerr != nil {
-				return nil, wrapHubAPIError(uerr)
+				return d, wrapHubAPIError(uerr)
 			}
 			d = updated
 
@@ -967,31 +1016,31 @@ func fillMissingForPublish(r *bufio.Reader, tty bool, client *api.Client, d *api
 				continue
 			}
 			if !tty {
-				return nil, fmt.Errorf("draft %s is missing a version; re-run with --version <version>", d.Code)
+				return d, fmt.Errorf("draft %s is missing a version; re-run with --version <version>", d.Code)
 			}
 			v, err := promptText(r, "Version", "", "--version <version>")
 			if err != nil {
-				return nil, err
+				return d, err
 			}
 			v = normalizeVersionFlag(v)
 			patch.Version = &v
 			changed = true
 
 		default:
-			return nil, fmt.Errorf("draft %s is missing %q, which stellar publish can't fill in - finish it on the hub", d.Code, field)
+			return d, fmt.Errorf("draft %s is missing %q, which stellar publish can't fill in - finish it on the hub", d.Code, field)
 		}
 	}
 
 	if changed {
 		updated, perr := client.PatchDraft(d.Code, patch)
 		if perr != nil {
-			return nil, wrapHubAPIError(perr)
+			return d, wrapHubAPIError(perr)
 		}
 		d = updated
 	}
 
 	if len(d.Missing) > 0 {
-		return nil, fmt.Errorf("draft %s is still missing: %s", d.Code, strings.Join(d.Missing, ", "))
+		return d, fmt.Errorf("draft %s is still missing: %s", d.Code, strings.Join(d.Missing, ", "))
 	}
 	return d, nil
 }
