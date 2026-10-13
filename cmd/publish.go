@@ -915,7 +915,7 @@ func draftSavedHint(err error, d *api.Draft) error {
 	}
 	return newHintedError(err.Error(), hint{
 		label:  "Draft saved",
-		values: []string{fmt.Sprintf("%s is saved - finish it on the hub: %s", d.Code, d.URL)},
+		values: []string{fmt.Sprintf("%s - finish it on the hub: %s", d.Code, d.URL)},
 	})
 }
 
