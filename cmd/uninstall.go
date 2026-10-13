@@ -10,6 +10,9 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/a3chron/stellar/internal/api"
+	"github.com/a3chron/stellar/internal/auth"
+	"github.com/a3chron/stellar/internal/cache"
 	"github.com/a3chron/stellar/internal/config"
 	"github.com/a3chron/stellar/internal/paths"
 	"github.com/a3chron/stellar/internal/symlink"
@@ -34,12 +37,13 @@ var uninstallCmd = &cobra.Command{
 
 This detaches your prompt first: if starship.toml is a symlink into stellar's
 cache, it is replaced by a plain copy of the theme you have applied, so your
-prompt keeps working after the cache is gone. Then the stellar directory
+prompt keeps working after the cache is gone. Then it logs this machine out
+of stellar-hub (unless --keep-config is given), and the stellar directory
 (cache, config and the backups of your original starship.toml) and the
 stellar binary itself are removed.
 
-Use --keep-config to keep ~/.config/stellar (themes, backups, config) and
-remove only the binary.`,
+Use --keep-config to keep ~/.config/stellar (themes, backups, config,
+credentials) and stay logged in to stellar-hub, removing only the binary.`,
 	Example: `  stellar uninstall
   stellar uninstall --yes
   stellar uninstall --keep-config`,
@@ -69,6 +73,10 @@ remove only the binary.`,
 
 		detachTarget := managedSymlinkTarget(starshipPath, stellarHome)
 
+		// Collected once so the "This will:" preview and the actual
+		// revocation below act on the exact same list.
+		loginEntries, _ := auth.StoredEntries()
+
 		// Say exactly what is about to happen before asking - this is the one
 		// stellar command that deletes things the user may not be able to get
 		// back (their original starship.toml backups).
@@ -76,12 +84,19 @@ remove only the binary.`,
 		if detachTarget != "" {
 			fmt.Printf("  - replace the symlink %s with a plain copy of your current theme\n", starshipPath)
 		}
+		if !uninstallKeepConfig && len(loginEntries) > 0 {
+			fmt.Println("  - log this machine out of stellar-hub")
+		}
 		if uninstallKeepConfig {
 			fmt.Printf("  - keep %s (themes, backups, config)\n", stellarHome)
 		} else {
 			fmt.Printf("  - remove %s (cached themes, config AND the backups of your original starship.toml)\n", stellarHome)
 		}
 		fmt.Printf("  - remove the binary %s\n", execPath)
+
+		if !uninstallKeepConfig {
+			printOwnThemesAndBackupsNotice(cfg)
+		}
 
 		if !uninstallYes {
 			ok, err := confirmUninstall(cmd.InOrStdin())
@@ -111,6 +126,14 @@ remove only the binary.`,
 		}
 
 		if !uninstallKeepConfig {
+			// Best-effort: revoke every stored stellar-hub login - not just
+			// whichever one STELLAR_API_URL currently points at - before the
+			// directory holding credentials.json is gone. Each is revoked
+			// against its OWN base URL (NewAuthedClientWithURL), since a
+			// login saved for a dev server or an old deployment must not be
+			// sent to whatever hub happens to be configured right now.
+			reportRevokedLogins(loginEntries)
+
 			if err := os.RemoveAll(stellarHome); err != nil {
 				return fmt.Errorf("failed to remove %s: %w", stellarHome, err)
 			}
@@ -124,12 +147,68 @@ remove only the binary.`,
 			fmt.Printf("Removed %s.\n", execPath)
 		}
 
-		color.Green("stellar has been uninstalled. Thanks for trying it!")
+		color.Green("✓ stellar has been uninstalled. Thanks for trying it!")
 		if runtime.GOOS == "windows" {
 			fmt.Println("The install directory is still on your user PATH; the uninstall.ps1 script removes that entry.")
 		}
 		return nil
 	},
+}
+
+// printOwnThemesAndBackupsNotice warns about what uninstalling (without
+// --keep-config) would take with it that stellar can't just re-download:
+// the user's own themes (same "own" definition `stellar clean` uses - see
+// cache.PlanClean) and their config backups. It's shown even with --yes,
+// purely as information the user may want before confirming (or before the
+// non-interactive run proceeds) - and stays quiet when there's nothing of
+// the user's own to mention, so a machine with only downloaded themes sees
+// no extra noise.
+func printOwnThemesAndBackupsNotice(cfg *config.Config) {
+	// All: true - uninstalling removes the whole directory regardless of
+	// what's currently applied, so the currently applied theme (if it's one
+	// of the user's own) must still be counted here, unlike `stellar
+	// clean`'s default of keeping it.
+	plan, err := cache.PlanClean(cache.CleanOptions{
+		All:        true,
+		Downloaded: cfg.DownloadedThemes,
+		Authored:   cfg.AuthoredThemes,
+	})
+	if err != nil || (len(plan.OwnThemes) == 0 && plan.BackupVersions == 0) {
+		return
+	}
+
+	color.Yellow("This will also delete:")
+	for _, ot := range plan.OwnThemes {
+		fmt.Printf("  %s (%d version(s))\n", ot.ID, ot.Versions)
+	}
+	if plan.BackupVersions > 0 {
+		fmt.Printf("  %d backup version(s)\n", plan.BackupVersions)
+	}
+	color.Cyan("Use --keep-config to keep these.")
+}
+
+// reportRevokedLogins best-effort revokes every entry in loginEntries
+// against its own base URL and prints the outcome. Uninstalling removes
+// credentials.json along with the rest of stellar home either way, so a
+// failure here (offline, an older hub without this route) is not fatal -
+// the directory removal below is what actually matters - but the user is
+// told where to revoke it by hand instead, since a token left valid on the
+// hub otherwise fails completely silently.
+func reportRevokedLogins(loginEntries []auth.StoredEntry) {
+	if len(loginEntries) == 0 {
+		return
+	}
+
+	allOK := true
+	for _, e := range loginEntries {
+		if err := api.NewAuthedClientWithURL(e.BaseURL, e.Token).RevokeToken(); err != nil {
+			allOK = false
+			color.Yellow("Couldn't revoke your stellar-hub login (offline?) - revoke it at %s/settings#cli-logins", e.BaseURL)
+		}
+	}
+	if allOK {
+		fmt.Println("Logged out of stellar-hub.")
+	}
 }
 
 // confirmUninstall reads a yes/no answer from in, following the same rule as
@@ -237,5 +316,5 @@ func removeSelf(execPath string) (leftover string) {
 
 func init() {
 	uninstallCmd.Flags().BoolVarP(&uninstallYes, "yes", "y", false, "Skip the confirmation prompt")
-	uninstallCmd.Flags().BoolVar(&uninstallKeepConfig, "keep-config", false, "Keep ~/.config/stellar (themes, backups, config); remove only the binary")
+	uninstallCmd.Flags().BoolVar(&uninstallKeepConfig, "keep-config", false, "Keep ~/.config/stellar (themes, backups, config, credentials) and stay logged in to stellar-hub; remove only the binary")
 }

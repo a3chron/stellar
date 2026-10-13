@@ -27,11 +27,12 @@ type MockTheme struct {
 
 // MockVersion represents a theme version
 type MockVersion struct {
-	Version       string
-	ConfigContent string // The actual TOML content
-	VersionNotes  string
-	Dependencies  []string
-	CreatedAt     string
+	Version            string
+	ConfigContent      string // The actual TOML content
+	VersionNotes       string
+	Dependencies       []string
+	MinStarshipVersion string
+	CreatedAt          string
 }
 
 // MockPing mirrors the body the CLI posts to /api/cli/ping. It is declared
@@ -56,15 +57,67 @@ type MockAPIHandler struct {
 	pings          []MockPing            // Install reports received, in order
 	pingStatus     int                   // Status to answer pings with; 0 means 204
 	reportDelay    time.Duration         // Hold "report" pings this long before recording them
+
+	// legacyHub, when true, makes every CLI auth/drafts route fall through to
+	// the old author/slug/version parsing below instead of being handled at
+	// all - exactly what happens against a real stellar-hub deployment from
+	// before CLI publishing existed (the CLI shipped ahead of the hub, or the
+	// hub was rolled back behind it). See SetLegacyHub.
+	legacyHub bool
+
+	// --- CLI auth state ---
+	deviceRequests        map[string]*mockDeviceRequest // key: deviceCode
+	userCodeToDevice      map[string]string             // key: userCode
+	nextAuthOutcome       *mockAuthOutcome              // consumed by the next StartDeviceAuth call
+	tokens                map[string]string             // key: bearer token -> username
+	users                 map[string]mockUserInfo       // key: username
+	deviceSeq             int
+	authTokenForcedErrors int // see SetNextAuthServerErrors
+
+	// --- Drafts state ---
+	drafts   map[string]*mockDraft // key: code (uppercase)
+	draftSeq int
+}
+
+// mockUserInfo is the minimal user identity CLI auth/drafts care about.
+type mockUserInfo struct {
+	name  string
+	image *string
 }
 
 // NewMockAPIHandler creates a new mock API handler
 func NewMockAPIHandler() *MockAPIHandler {
 	return &MockAPIHandler{
-		themes:         make(map[string]*MockTheme),
-		DownloadCounts: make(map[string]int),
-		RequestCounts:  make(map[string]int),
+		themes:           make(map[string]*MockTheme),
+		DownloadCounts:   make(map[string]int),
+		RequestCounts:    make(map[string]int),
+		deviceRequests:   make(map[string]*mockDeviceRequest),
+		userCodeToDevice: make(map[string]string),
+		tokens:           make(map[string]string),
+		users:            make(map[string]mockUserInfo),
+		drafts:           make(map[string]*mockDraft),
 	}
+}
+
+// SetLegacyHub makes the mock behave like a stellar-hub deployment from
+// before CLI publishing existed: every new route (cli/auth/*, drafts/**)
+// falls through unhandled to the old author/slug/version parsing, which
+// naturally 404s on nonsense paths like "cli/auth" or "drafts/<code>" with a
+// plain-text (non-JSON) body - exactly the shape a pre-upgrade hub would
+// produce, since it has no such routes at all. Tests use this to verify
+// stellar reports "stellar-hub doesn't support CLI publishing yet" instead
+// of a misleading "Unauthorized"/"run stellar auth".
+func (h *MockAPIHandler) SetLegacyHub(legacy bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.legacyHub = legacy
+}
+
+// themeKey builds the map key h.themes is stored under, lowercased so theme
+// lookups are username-case-insensitive - matching the real hub, where
+// usernames are compared case-insensitively.
+func themeKey(author, slug string) string {
+	return strings.ToLower(author) + "/" + strings.ToLower(slug)
 }
 
 // AddTheme adds a theme to the mock API
@@ -72,7 +125,7 @@ func (h *MockAPIHandler) AddTheme(theme MockTheme) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	key := theme.Author + "/" + theme.Slug
+	key := themeKey(theme.Author, theme.Slug)
 	h.themes[key] = &theme
 	h.DownloadCounts[key] = theme.Downloads
 }
@@ -99,6 +152,25 @@ func (h *MockAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// CLI auth and drafts routes must also come before the author/slug
+	// parsing below - /api/drafts/K7QF2M would otherwise parse as author
+	// "drafts", slug "K7QF2M" and 404. SetLegacyHub(true) skips this block
+	// entirely so these paths fall through to that same author/slug parsing,
+	// reproducing a pre-upgrade hub that has no such routes at all.
+	h.mu.Lock()
+	legacy := h.legacyHub
+	h.mu.Unlock()
+	if !legacy {
+		if len(parts) >= 2 && parts[0] == "cli" && parts[1] == "auth" {
+			h.handleCLIAuth(w, r, parts[2:])
+			return
+		}
+		if parts[0] == "drafts" {
+			h.handleDrafts(w, r, parts[1:])
+			return
+		}
+	}
+
 	if len(parts) < 2 {
 		http.Error(w, "Not found", http.StatusNotFound)
 		return
@@ -106,7 +178,7 @@ func (h *MockAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	author := parts[0]
 	slug := parts[1]
-	key := author + "/" + slug
+	key := themeKey(author, slug)
 
 	// Snapshot the theme under the mutex: handleIncrementDownload writes
 	// theme.Downloads concurrently, so handlers must not read the shared
@@ -144,6 +216,14 @@ func (h *MockAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // handleGetTheme returns theme info
 func (h *MockAPIHandler) handleGetTheme(w http.ResponseWriter, theme *MockTheme) {
+	// GET /api/{author}/{slug} returns versions sorted numerically, newest
+	// first - matching the hub - regardless of the order they were stored
+	// or published in.
+	sorted := append([]MockVersion(nil), theme.Versions...)
+	sort.Slice(sorted, func(i, j int) bool {
+		return compareMockVersions(sorted[i].Version, sorted[j].Version) > 0
+	})
+
 	response := map[string]interface{}{
 		"id":          theme.ID,
 		"slug":        theme.Slug,
@@ -160,7 +240,7 @@ func (h *MockAPIHandler) handleGetTheme(w http.ResponseWriter, theme *MockTheme)
 			"image": nil,
 			"bio":   nil,
 		},
-		"versions": h.formatVersions(theme.Versions),
+		"versions": h.formatVersions(sorted),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -188,9 +268,10 @@ func (h *MockAPIHandler) handleVersionRequest(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Handle "latest" version
+	// Handle "latest" version - the numeric maximum, not whichever entry
+	// happens to be stored first.
 	if version == "latest" && len(theme.Versions) > 0 {
-		version = theme.Versions[0].Version
+		version = maxMockVersion(theme.Versions).Version
 	}
 
 	// Find the version
@@ -303,7 +384,7 @@ func (h *MockAPIHandler) handleSearchThemes(w http.ResponseWriter, r *http.Reque
 			"updatedAt":     t.UpdatedAt,
 		}
 		if len(t.Versions) > 0 {
-			theme["latestVersion"] = t.Versions[0].Version
+			theme["latestVersion"] = maxMockVersion(t.Versions).Version
 		}
 		themesJSON[i] = theme
 	}
@@ -406,7 +487,7 @@ func (h *MockAPIHandler) SetPingStatus(code int) {
 func (h *MockAPIHandler) GetDownloadCount(author, slug string) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.DownloadCounts[author+"/"+slug]
+	return h.DownloadCounts[themeKey(author, slug)]
 }
 
 // Requests returns how many requests the handler has received for path

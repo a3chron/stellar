@@ -7,6 +7,7 @@ import (
 	"github.com/a3chron/stellar/internal/api"
 	"github.com/a3chron/stellar/internal/cache"
 	"github.com/a3chron/stellar/internal/config"
+	"github.com/a3chron/stellar/internal/term"
 	"github.com/a3chron/stellar/internal/theme"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
@@ -106,9 +107,21 @@ var infoCmd = &cobra.Command{
 			cachedSet[cv] = true
 		}
 
+		// Every string below came from stellar-hub (or, offline/localOnly, is
+		// built straight from the identifier the user themselves typed) -
+		// sanitized before printing so a malicious or buggy response can
+		// never inject terminal escape sequences or fake extra lines of
+		// output. Description and version notes are the one multi-line
+		// exception (SanitizeMultiline): they're free-form text that's
+		// expected to keep its author's own line breaks.
+		name := term.SanitizeForTerminal(info.Name)
+		authorName := term.SanitizeForTerminal(info.Author.Name)
+		slug := term.SanitizeForTerminal(info.Slug)
+		description := term.SanitizeMultiline(info.Description)
+
 		// Display theme information
 		color.Cyan("═══════════════════════════════════════")
-		color.Green("  %s", info.Name)
+		color.Green("  %s", name)
 		color.Cyan("═══════════════════════════════════════")
 		fmt.Println()
 		switch {
@@ -121,10 +134,10 @@ var infoCmd = &cobra.Command{
 		}
 
 		// Basic info
-		fmt.Printf("Author:       %s\n", info.Author.Name)
-		fmt.Printf("Slug:         %s\n", info.Slug)
-		if info.Description != "" {
-			fmt.Printf("Description:  %s\n", info.Description)
+		fmt.Printf("Author:       %s\n", authorName)
+		fmt.Printf("Slug:         %s\n", slug)
+		if description != "" {
+			fmt.Printf("Description:  %s\n", description)
 		}
 		if !offline && !localOnly {
 			fmt.Printf("Downloads:    %d\n", info.Downloads)
@@ -134,19 +147,20 @@ var infoCmd = &cobra.Command{
 		// Versions
 		color.Yellow("Versions (%d):", len(info.Versions))
 		for _, v := range info.Versions {
+			version := term.SanitizeForTerminal(v.Version)
 			isCurrent := cachedSet[v.Version] &&
 				cfg.CurrentTheme == fmt.Sprintf("%s/%s@%s", t.Author, t.Name, v.Version)
 
 			switch {
 			case isCurrent:
-				fmt.Print(color.GreenString("  ✳ %s (installed, current)", v.Version))
+				fmt.Print(color.GreenString("  ✳ %s (installed, current)", version))
 			case cachedSet[v.Version]:
-				fmt.Print(color.GreenString("  ✓ %s (installed)", v.Version))
+				fmt.Print(color.GreenString("  ✓ %s (installed)", version))
 			default:
-				fmt.Printf("  • %s", v.Version)
+				fmt.Printf("  • %s", version)
 			}
-			if v.VersionNotes != "" {
-				fmt.Printf(" - %s", v.VersionNotes)
+			if notes := term.SanitizeMultiline(v.VersionNotes); notes != "" {
+				fmt.Printf(" - %s", notes)
 			}
 			fmt.Println()
 		}
@@ -156,7 +170,7 @@ var infoCmd = &cobra.Command{
 		if len(info.Versions) > 0 && len(info.Versions[0].Dependencies) > 0 {
 			color.Yellow("Dependencies:")
 			for _, dep := range info.Versions[0].Dependencies {
-				fmt.Printf("  • %s\n", dep)
+				fmt.Printf("  • %s\n", term.SanitizeForTerminal(dep))
 			}
 			fmt.Println()
 		}

@@ -9,12 +9,45 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"runtime"
 	"time"
 
 	"github.com/a3chron/stellar/internal/paths"
 )
 
 const BaseURL = "https://stellar.a3chron.dev"
+
+// Version is the running CLI's version string, used to build the User-Agent
+// header sent on every request. It's a plain package var (rather than an
+// import of cmd, which would be a cycle) - cmd/version.go's SetVersionInfo
+// sets it alongside rootCmd.Version.
+var Version = "dev"
+
+// userAgent builds the User-Agent every request carries, matching the
+// contract's expected shape: "stellar-cli/<version> (<goos>; <goarch>)". The
+// hub only recognizes goos values linux/darwin/windows and goarch
+// amd64/arm64 - anything else (a 386 or arm build) still sends a well-formed
+// header, it's just logged by the hub as "unknown client" rather than
+// attributed to a known platform, which is a hub-side concern, not ours.
+func userAgent() string {
+	return fmt.Sprintf("stellar-cli/%s (%s; %s)", Version, runtime.GOOS, runtime.GOARCH)
+}
+
+// userAgentTransport sets the User-Agent header on every outgoing request
+// that doesn't already have one, so every API call - old and new endpoints
+// alike - identifies itself consistently without every call site needing to
+// set the header itself.
+type userAgentTransport struct {
+	base http.RoundTripper
+}
+
+func (t *userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Header.Get("User-Agent") == "" {
+		req = req.Clone(req.Context())
+		req.Header.Set("User-Agent", userAgent())
+	}
+	return t.base.RoundTrip(req)
+}
 
 // ErrOffline wraps a request that never reached stellar-hub at all (DNS
 // failure, connection refused, timeout) - as opposed to the hub answering
@@ -69,6 +102,9 @@ func wrapTransportError(err error) error {
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
+	// token is set only on an authed client (see NewAuthedClient) and sent
+	// as "Authorization: Bearer <token>" on every request it makes.
+	token string
 }
 
 // newClient builds a Client pointed at baseURL with the given request
@@ -79,7 +115,8 @@ func newClient(baseURL string, timeout time.Duration) *Client {
 	return &Client{
 		baseURL: baseURL,
 		httpClient: &http.Client{
-			Timeout: timeout,
+			Timeout:   timeout,
+			Transport: &userAgentTransport{base: http.DefaultTransport},
 		},
 	}
 }

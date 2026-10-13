@@ -160,9 +160,20 @@ var applyCmd = &cobra.Command{
 			} else {
 				// Check online for latest version (first download or --update)
 				info, infoErr := client.GetThemeInfo(t.Author, t.Name)
+				latestVersion := ""
 				if infoErr == nil && len(info.Versions) > 0 {
+					latestVersion = info.Versions[0].Version
+				}
+				// A version string that reaches CachePath/the "Forked from"
+				// header unchecked could contain "../" or a newline - never
+				// trust one from the hub without validating its shape first,
+				// same as fork.go/preview.go.
+				if latestVersion != "" && !theme.IsValidVersion(latestVersion) {
+					infoErr = fmt.Errorf("stellar-hub returned an invalid version %q for %s/%s", latestVersion, t.Author, t.Name)
+					latestVersion = ""
+				}
+				if latestVersion != "" {
 					// Online theme found - use latest version from API
-					latestVersion := info.Versions[0].Version
 
 					// If updating, report whether a newer version is actually
 					// available - staying silent either way used to leave
@@ -172,7 +183,7 @@ var applyCmd = &cobra.Command{
 						if latestVersion != localVer {
 							color.Yellow("Update available: %s -> %s", localVer, latestVersion)
 						} else {
-							color.Green("Already on the latest version (%s)", latestVersion)
+							color.Green("✓ Already on the latest version (%s)", latestVersion)
 						}
 					}
 
@@ -219,7 +230,7 @@ var applyCmd = &cobra.Command{
 				return fmt.Errorf("validation error: %w", err)
 			}
 			if !validationResult.Valid {
-				return fmt.Errorf("invalid config: %w", validationResult.Error)
+				return validationResult.Error
 			}
 
 			// Check for custom commands and warn user
@@ -298,9 +309,9 @@ var applyCmd = &cobra.Command{
 		}
 
 		if alreadyCurrent {
-			color.Green("Already applied (refreshed): %s", t)
+			color.Green("✓ Already applied (refreshed): %s", t)
 		} else {
-			color.Green("Applied %s", t)
+			color.Green("✓ Applied %s", t)
 		}
 
 		warnPostApplyEnvironment()

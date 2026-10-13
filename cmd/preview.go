@@ -86,8 +86,18 @@ var previewCmd = &cobra.Command{
 				} else {
 					// No local cache - check online for latest version
 					info, infoErr := client.GetThemeInfo(t.Author, t.Name)
+					latestVersion := ""
 					if infoErr == nil && len(info.Versions) > 0 {
-						t.Version = info.Versions[0].Version
+						latestVersion = info.Versions[0].Version
+					}
+					// Never trust a version string from the hub unchecked -
+					// it ends up in a cache file path (../ would escape it).
+					if latestVersion != "" && !theme.IsValidVersion(latestVersion) {
+						infoErr = fmt.Errorf("stellar-hub returned an invalid version %q for %s/%s", latestVersion, t.Author, t.Name)
+						latestVersion = ""
+					}
+					if latestVersion != "" {
+						t.Version = latestVersion
 					} else {
 						return hubUnreachableError(t, infoErr)
 					}

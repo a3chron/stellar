@@ -119,6 +119,14 @@ and the binary are removed. Restore a backup with `stellar apply <username>/back
 *before* uninstalling if you want your original prompt back, or pass
 `--keep-config` to keep the directory.
 
+Unless you pass `--keep-config`, stellar first lists any of your own themes
+and config backups that are about to go with it (it never lists downloaded
+themes - those you can always get back with `stellar apply`), so you know
+to pass `--keep-config` first if you want to keep them. It also logs this
+machine out of stellar-hub (revoking every login `credentials.json` has
+stored), printing a settings link to revoke it by hand if that fails (e.g.
+offline).
+
 ## Why use
 
 **Before:** Getting good starship configs so far was mostly random, from someones github dotfiles, searching for something entirely else...  
@@ -158,8 +166,13 @@ stellar current
 # Get theme info
 stellar info a3chron/ctp-green
 
-# Clean cache (keep current)
+# Clean cache - removes only themes stellar downloaded, keeps the current
+# theme, your own themes, and your backups
 stellar clean
+
+# Also remove your own themes (hand-made, or from new/fork) - everything
+# except the currently applied theme; still never your backups
+stellar clean --include-own
 
 # Remove all versions of a theme
 stellar remove a3chron/ctp-green
@@ -175,17 +188,32 @@ stellar update
 
 # Remove stellar from this machine (see Uninstall above)
 stellar uninstall
+
+# Log in to stellar-hub (see Publishing Your Themes below)
+stellar auth
+
+# Start a new theme, or copy an existing one to build on
+stellar new my-theme
+stellar fork a3chron/ctp-blue my-blue
+
+# Upload a local theme as a draft (new theme or new version, works either way)
+stellar publish my-theme
 ```
 
 ### Confirmations and `--force`
 
-`apply`, `preview` and `rollback` all show a security warning and ask
-`Do you trust this theme and want to apply/preview/restore it? [y/N]:`
-before ever running starship against a theme that contains `[custom]`
-commands (those can execute arbitrary shell code on every prompt render).
-This only ever fires for genuinely new content: a theme that's already
-cached locally is never re-prompted, only a fresh download from the hub is
-(rollback's re-download-when-missing path included).
+`apply`, `preview`, `rollback` and `fork` all show a security warning and ask
+`Do you trust this theme and want to apply/preview/restore/fork it? [y/N]:`
+before trusting a theme that contains `[custom]` commands (those can
+execute arbitrary shell code on every prompt render).
+
+For `apply`/`preview`/`rollback` this only ever fires for genuinely new
+content: a theme that's already cached locally is never re-prompted, only a
+fresh download from the hub is (rollback's re-download-when-missing path
+included). `fork` is different: it always prompts when the source has
+`[custom]` commands, even from your own local cache - once forked, it's
+content you now own, and `apply` never prompts about it again, so this is
+the only chance to see the warning.
 
 - `y`/`yes` (however it reaches stdin - typed, piped, or redirected)
   confirms; anything else declines and the command aborts with a non-zero
@@ -198,14 +226,16 @@ cached locally is never re-prompted, only a fresh download from the hub is
   and terminals that don't look like a TTY (e.g. mintty/Git Bash on
   Windows) still work fine, since they do have a real answer to read.
 
-Pass `--force` (`-f`) to `apply`, `preview` or `rollback` to skip that
-confirmation outright. `--force` also has a second effect: it skips TOML
-validation (and the 100KB size cap) for a theme that's **already on
-disk** - cached, local/hand-written, or (for `rollback`) the previous
-theme - printing a yellow warning instead of refusing, so you can force
-through your own work-in-progress config. A **freshly downloaded** theme
-is always validated in full regardless of `--force`; only the
-`[custom]`-command confirmation is skippable for that content.
+Pass `--force` (`-f`) to `apply`, `preview`, `rollback` or `fork` to skip
+that confirmation outright. For `apply`/`preview`/`rollback`, `--force` also
+has a second effect: it skips TOML validation (and the 100KB size cap) for a
+theme that's **already on disk** - cached, local/hand-written, or (for
+`rollback`) the previous theme - printing a yellow warning instead of
+refusing, so you can force through your own work-in-progress config. A
+**freshly downloaded** theme is always validated in full regardless of
+`--force`; only the `[custom]`-command confirmation is skippable for that
+content. `fork`'s `--force` only skips the confirmation - a theme with
+invalid TOML is always refused, never force-copied.
 
 `stellar remove` also has `--force`, with an unrelated meaning: it lets you
 remove the currently active theme (normally refused).
@@ -240,10 +270,64 @@ You can see all available community themes at the [stellar hub](https://stellar.
 
 #### Publishing Your Themes
 
-I am working on getting a `stellar publish` command, but currently you will have to publish your theme at [the upload form](https://stellar.a3chron.dev/upload).
+```bash
+# Log in once (opens a browser to approve this device)
+stellar auth
 
-If you want to update a theme, you can do so in your stellar hub settings, either "Edit Metadata" (The pencil icon), or "Update" (The upload icon), 
-with beeing able to update either metadata like the theme name, description, prerequesites etc., or upload a new config version with version notes.
+# Start a brand-new theme, or copy one you want to build on
+stellar new my-theme
+stellar fork a3chron/ctp-blue my-blue
+
+# Upload it - this starts a draft on the hub either way, new theme or new version
+stellar publish my-theme
+
+# ...or finish it immediately, skipping the web step
+stellar publish my-theme --publish --name "My Theme" --screenshot ./shot.png
+```
+
+`stellar publish <path|author/slug[@version]|name>` uploads a local theme as
+a draft: if it isn't on the hub yet under your name, this starts a new
+theme; if it's already yours, it starts a new version instead - the same
+command handles both. By default it prints a link to finish the draft (name,
+description, screenshot, etc.) on the hub; pass `--publish` to fill in
+anything still missing right from the CLI (prompting interactively, or
+failing with the flag name to pass non-interactively) and publish
+immediately. See `stellar publish --help` for the full set of flags
+(`--slug`, `--name`, `--description`, `--group`, `--color-mode`, `--dep`,
+`--min-starship`, `--screenshot`, `--version`, `--notes`, `--draft`, `--yes`).
+
+`stellar new [author/]name` creates an empty starter theme under your
+stellar cache (your logged-in username by default), and
+`stellar fork author/slug[@version] [[author/]name]` copies an existing
+theme - from the hub, or your local cache if you're offline - into one you
+own and can edit freely. Either way, the theme name is normalized to the
+hub's slug form (lowercase letters, digits and dashes - the same rule
+`stellar publish` applies to a slug), printing a note when that changed what
+you typed; the author segment is kept exactly as given. Like `apply`,
+`preview` and `rollback`, `fork` shows the `[custom]`-command security
+warning (and asks to confirm) before copying a theme that runs shell
+commands; pass `--force`/`-f` to skip that. A plain `stellar clean` never
+removes a `new`/`fork` theme (`--include-own` does); your
+[backups](#automatic-backup-of-your-original-config) stay protected even
+then.
+
+Your login is stored at `~/.config/stellar/credentials.json` (readable only
+by you). `stellar auth status` shows who you're logged in as,
+`stellar auth logout` revokes it, and `stellar uninstall` revokes it
+automatically unless you pass `--keep-config`.
+
+In CI (or anywhere else `stellar auth`'s interactive browser flow doesn't
+make sense), set `STELLAR_TOKEN` to a token instead - every command that
+talks to stellar-hub uses it in place of the stored credential, with no
+`stellar auth` step needed. It's never written to disk and never revoked by
+`stellar auth logout`/`stellar uninstall` (there's nothing stored to revoke);
+unset it yourself, or revoke it from your hub settings, when it's no longer
+needed.
+
+Updating an existing theme (new version, edited metadata, etc.) is also just
+`stellar publish` - there's no separate update command. You can still do
+either from your stellar hub settings instead, if you'd rather not use the
+CLI.
 
 ## Local configs
 
@@ -273,8 +357,15 @@ Its content is already backed up as <username>/backup@1.0 - stellar now manages 
 
 Stellar recognizes its own applied file by a checksum recorded in `~/.config/stellar/config.json`, independent of apply mode (symlink or copy) or OS. This means editing a cached theme file directly and re-applying it, or running `stellar clean`/`stellar clean --all` and then applying another theme, never creates a spurious backup, only a config file you actually hand-edited yourself gets preserved.
 
-`stellar clean` (with or without `--all`) never deletes your backups either. 
-They're preserved automatically and only removed if you explicitly run `stellar remove <username>/backup`.
+`stellar clean` never deletes your backups, with or without `--all` or
+`--include-own`. They're preserved automatically and only removed if you
+explicitly run `stellar remove <username>/backup`.
+
+More generally, `stellar clean` only ever removes themes it downloaded
+itself - never a theme you made yourself, whether that's a hand-written
+config under `~/.config/stellar/<you>/`, or one created with `stellar new`/
+`stellar fork`. Pass `--include-own` if you actually want those gone too
+(see [Basic Usage](#basic-usage)).
 
 This ensures your carefully crafted config is never lost :) You can apply the newest backup anytime with:
 ```bash
@@ -448,15 +539,13 @@ When adding new CLI features, please add corresponding E2E tests in `cmd/e2e_tes
 - [ ] **`stellar preview` on Windows**: `cmd/preview.go` only spawns terminals on macOS/Linux. On Windows (and anywhere else no terminal could be opened) it now prints the exact command to preview manually instead of erroring, but still doesn't open a window itself - needs a Windows Terminal / PowerShell branch that opens a shell with `STARSHIP_CONFIG` set.
 - [ ] **Windows packaging**: consider scoop/winget packaging (leftover `stellar.exe.old` from self-update is already cleaned up on the next run).
 - [x] **CI test job**: `go vet` and `go test` (with `-race` on Linux) run on every pull request and again before goreleaser, on both `ubuntu-latest` and `windows-latest`, so a tag can't publish a failing build and the copy path is guarded natively.
-- [ ] **`stellar publish` command**: Upload local themes directly to stellar-hub
-  - Challenge: Need to implement CLI authentication (OAuth flow with browser redirect or API keys)
-  - Would read from `~/.config/stellar/<author>/<theme>/<version>.toml`
-  - Interactive prompts for metadata (name, description, screenshot, etc.)
-  - Skip complex fields initially (e.g., color scheme selection - add later)
-- [ ] **`stellar update <theme>` command**: Update an existing theme on stellar-hub with a new version
-  - Requires authentication (same challenge as publish)
-  - Upload new version of already published theme
-  - Interactive prompts for version notes, dependencies, etc.
+- [x] **`stellar publish` command**: Upload local themes directly to stellar-hub
+  - `stellar auth` does the browser device-login, storing a bearer token in `credentials.json`
+  - Reads from `~/.config/stellar/<author>/<theme>/<version>.toml` (or a bare path, or `author/slug[@version]`)
+  - Interactive prompts for metadata (name, description, screenshot, etc.), or flags for non-interactive use
+  - Uploads into a draft by default (finish it on the hub), or `--publish` to finish immediately
+- [x] **`stellar update <theme>` command**: Update an existing theme on stellar-hub with a new version
+  - This ended up folded into `stellar publish`: publishing a theme that's already yours starts a new version instead of a new theme, so there's no separate update command
 - [ ] Add progress bars for downloads
 - [ ] **Get stellar into nixpkgs**: the flake is nixified - `nix build` and `nix run` produce a
   real binary with version ldflags and installed bash/zsh/fish completions, and

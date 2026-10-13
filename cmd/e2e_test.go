@@ -1159,6 +1159,62 @@ func TestE2E_Clean(t *testing.T) {
 		require.NoError(t, err)
 	})
 
+	t.Run("A hand-made theme survives a plain clean", func(t *testing.T) {
+		// ~/.config/stellar is also where the README tells people to put
+		// their own themes - a theme stellar never downloaded (not in
+		// DownloadedThemes) must not be swept away by a plain clean.
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		handMadePath := env.CreateThemeFile("me", "my-own-theme", "1.0", testutil.SampleTOML())
+
+		out := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"clean"})
+			cmd.SetOut(new(bytes.Buffer))
+			require.NoError(t, cmd.Execute())
+		})
+
+		assert.True(t, env.FileExists(handMadePath))
+		assert.Contains(t, out, "Nothing to clean")
+		assert.Contains(t, out, "Kept 1 of your own themes")
+	})
+
+	t.Run("Downloaded themes are removed", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		downloadedPath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+		env.CreateConfig(`{"downloaded_themes": ["alice/rainbow"]}`)
+
+		out := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"clean"})
+			cmd.SetOut(new(bytes.Buffer))
+			require.NoError(t, cmd.Execute())
+		})
+
+		assert.False(t, env.FileExists(downloadedPath))
+		assert.Contains(t, out, "Removed 1 downloaded theme(s)")
+	})
+
+	t.Run("An authored theme that is also downloaded survives a plain clean", func(t *testing.T) {
+		// Publishing your own theme and re-downloading it (e.g. on another
+		// machine) must not make a plain clean treat it as disposable.
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		path := env.CreateThemeFile("me", "my-theme", "1.0", testutil.SampleTOML())
+		env.CreateConfig(`{"downloaded_themes": ["me/my-theme"], "authored_themes": ["me/my-theme"]}`)
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"clean"})
+		cmd.SetOut(new(bytes.Buffer))
+		require.NoError(t, cmd.Execute())
+
+		assert.True(t, env.FileExists(path))
+	})
+
 	t.Run("Preserves current theme", func(t *testing.T) {
 		env := testutil.SetupTestEnv(t)
 		resetFlags()
@@ -1168,7 +1224,8 @@ func TestE2E_Clean(t *testing.T) {
 
 		config := `{
   "current_theme": "alice/rainbow@1.0",
-  "current_path": "` + currentPath + `"
+  "current_path": "` + currentPath + `",
+  "downloaded_themes": ["alice/rainbow", "bob/sunset"]
 }`
 		env.CreateConfig(config)
 
@@ -1183,7 +1240,7 @@ func TestE2E_Clean(t *testing.T) {
 		assert.False(t, env.FileExists(otherPath))
 	})
 
-	t.Run("All flag removes everything", func(t *testing.T) {
+	t.Run("All flag removes everything downloaded, including the current one", func(t *testing.T) {
 		env := testutil.SetupTestEnv(t)
 		resetFlags()
 
@@ -1192,7 +1249,8 @@ func TestE2E_Clean(t *testing.T) {
 
 		config := `{
   "current_theme": "alice/rainbow@1.0",
-  "current_path": "` + currentPath + `"
+  "current_path": "` + currentPath + `",
+  "downloaded_themes": ["alice/rainbow", "bob/sunset"]
 }`
 		env.CreateConfig(config)
 
@@ -1211,6 +1269,7 @@ func TestE2E_Clean(t *testing.T) {
 		resetFlags()
 
 		env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+		env.CreateConfig(`{"downloaded_themes": ["alice/rainbow"]}`)
 
 		cmd := NewRootCmd()
 		cmd.SetArgs([]string{"clean"})
@@ -1223,12 +1282,13 @@ func TestE2E_Clean(t *testing.T) {
 		assert.False(t, env.FileExists(filepath.Join(env.StellarDir, "alice")))
 	})
 
-	t.Run("No current theme removes all", func(t *testing.T) {
+	t.Run("No current theme removes all downloaded", func(t *testing.T) {
 		env := testutil.SetupTestEnv(t)
 		resetFlags()
 
 		path1 := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
 		path2 := env.CreateThemeFile("bob", "sunset", "2.0", testutil.SampleTOML())
+		env.CreateConfig(`{"downloaded_themes": ["alice/rainbow", "bob/sunset"]}`)
 
 		cmd := NewRootCmd()
 		cmd.SetArgs([]string{"clean"})
@@ -1241,7 +1301,7 @@ func TestE2E_Clean(t *testing.T) {
 		assert.False(t, env.FileExists(path2))
 	})
 
-	t.Run("Only preserves current version", func(t *testing.T) {
+	t.Run("Only preserves current version among downloaded ones", func(t *testing.T) {
 		env := testutil.SetupTestEnv(t)
 		resetFlags()
 
@@ -1251,7 +1311,8 @@ func TestE2E_Clean(t *testing.T) {
 
 		config := `{
   "current_theme": "alice/rainbow@1.5",
-  "current_path": "` + currentPath + `"
+  "current_path": "` + currentPath + `",
+  "downloaded_themes": ["alice/rainbow"]
 }`
 		env.CreateConfig(config)
 
@@ -1265,6 +1326,115 @@ func TestE2E_Clean(t *testing.T) {
 		assert.True(t, env.FileExists(currentPath))
 		assert.False(t, env.FileExists(filepath.Join(env.StellarDir, "alice", "rainbow", "1.0.toml")))
 		assert.False(t, env.FileExists(filepath.Join(env.StellarDir, "alice", "rainbow", "2.0.toml")))
+	})
+
+	t.Run("--include-own removes own themes after a piped y", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		handMadePath := env.CreateThemeFile("me", "my-own-theme", "1.0", testutil.SampleTOML())
+		downloadedPath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+		env.CreateConfig(`{"downloaded_themes": ["alice/rainbow"]}`)
+
+		out := testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"clean", "--include-own"})
+			cmd.SetOut(new(bytes.Buffer))
+			cmd.SetIn(strings.NewReader("y\n"))
+			require.NoError(t, cmd.Execute())
+		})
+
+		assert.False(t, env.FileExists(handMadePath))
+		assert.False(t, env.FileExists(downloadedPath))
+		assert.Contains(t, out, "me/my-own-theme")
+		assert.Contains(t, out, "Removed 1 of your own theme(s)")
+	})
+
+	t.Run("--include-own on n aborts and removes nothing at all", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		handMadePath := env.CreateThemeFile("me", "my-own-theme", "1.0", testutil.SampleTOML())
+		downloadedPath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+		env.CreateConfig(`{"downloaded_themes": ["alice/rainbow"]}`)
+
+		var execErr error
+		testutil.CaptureOutput(t, func() {
+			cmd := NewRootCmd()
+			cmd.SetArgs([]string{"clean", "--include-own"})
+			cmd.SetOut(new(bytes.Buffer))
+			cmd.SetIn(strings.NewReader("n\n"))
+			execErr = cmd.Execute()
+		})
+
+		require.Error(t, execErr)
+		assert.Contains(t, execErr.Error(), "nothing was removed")
+		assert.True(t, env.FileExists(handMadePath), "declining must keep own themes")
+		assert.True(t, env.FileExists(downloadedPath), "declining must not clean anything else either")
+	})
+
+	t.Run("--include-own on a non-TTY EOF errors and names --yes", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		handMadePath := env.CreateThemeFile("me", "my-own-theme", "1.0", testutil.SampleTOML())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"clean", "--include-own"})
+		cmd.SetOut(new(bytes.Buffer))
+		cmd.SetIn(pipeStdin(t))
+		err := cmd.Execute()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "--yes")
+		assert.True(t, env.FileExists(handMadePath))
+	})
+
+	t.Run("--include-own --yes skips the confirmation", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		handMadePath := env.CreateThemeFile("me", "my-own-theme", "1.0", testutil.SampleTOML())
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"clean", "--include-own", "--yes"})
+		cmd.SetOut(new(bytes.Buffer))
+		cmd.SetIn(pipeStdin(t))
+		require.NoError(t, cmd.Execute())
+
+		assert.False(t, env.FileExists(handMadePath))
+	})
+
+	t.Run("--all --include-own together remove everything but backups", func(t *testing.T) {
+		testutil.RequireSymlinks(t)
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+
+		env.CreateStarshipConfig("# hand-written original config")
+		currentPath := env.CreateThemeFile("local", "current", "1.0", testutil.SampleTOML())
+		env.CreateConfig(`{
+  "current_theme": "local/current@1.0",
+  "current_path": "` + currentPath + `"
+}`)
+
+		applyCmd := NewRootCmd()
+		applyCmd.SetArgs([]string{"apply", "local/current@1.0"})
+		applyCmd.SetOut(new(bytes.Buffer))
+		require.NoError(t, applyCmd.Execute())
+		resetFlags()
+
+		handMadePath := env.CreateThemeFile("me", "my-own-theme", "1.0", testutil.SampleTOML())
+		backupPath := filepath.Join(env.StellarDir, symlink.BackupAuthor(), "backup", "1.0.toml")
+		require.True(t, env.FileExists(backupPath))
+
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"clean", "--all", "--include-own", "--yes"})
+		cmd.SetOut(new(bytes.Buffer))
+		require.NoError(t, cmd.Execute())
+
+		assert.False(t, env.FileExists(currentPath), "--all must remove even the currently applied theme")
+		assert.False(t, env.FileExists(handMadePath))
+		assert.True(t, env.FileExists(backupPath), "backups survive even --all --include-own")
 	})
 
 	t.Run("Preserves backups", func(t *testing.T) {
@@ -1880,12 +2050,29 @@ func resetFlags() {
 	updateTheme = false
 	forceRemove = false
 	cleanAll = false
+	cleanIncludeOwn = false
+	cleanYes = false
+	forkForce = false
 	uninstallYes = false
 	uninstallKeepConfig = false
 	rollbackForce = false
 	previewForce = false
 	previewShell = ""
 	previewTerminal = ""
+	authNoBrowser = false
+	publishSlug = ""
+	publishName = ""
+	publishDescription = ""
+	publishGroup = ""
+	publishColorMode = ""
+	publishDeps = nil
+	publishMinStarship = ""
+	publishScreenshot = ""
+	publishVersion = ""
+	publishNotes = ""
+	publishDraftCode = ""
+	publishDoPublish = false
+	publishYes = false
 }
 
 // pinVersion sets versionInfo to a known non-dev version (IsDev() gates
@@ -1956,6 +2143,7 @@ func TestE2E_ApplySecurityWarningReviewLink(t *testing.T) {
 		})
 
 		assert.Contains(t, output, "SECURITY WARNING")
+		assert.Contains(t, output, "Community themes aren't reviewed - you apply them at your own risk.")
 
 		// Built from the same base the API client used, so it follows
 		// STELLAR_API_URL here instead of pointing at production.
@@ -2548,7 +2736,8 @@ func TestE2E_ValidatesCachedTheme(t *testing.T) {
 
 		err := cmd.Execute()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid")
+		assert.Contains(t, err.Error(), "invalid TOML")
+		assert.NotContains(t, err.Error(), "invalid config: invalid TOML", "the message must not stack two redundant prefixes")
 		assert.False(t, env.FileExists(env.StarshipPath), "an invalid theme must never be applied")
 	})
 
@@ -3640,4 +3829,47 @@ func TestE2E_RemoveCacheOnlySuggestions(t *testing.T) {
 			"alice/raimbow isn't in your local cache\nDid you mean: alice/rainbow",
 			err.Error())
 	})
+}
+
+// TestE2E_InfoSanitizesHubFields guards review item 2: every hub-provided
+// string `stellar info` prints (name, author, slug, description, version
+// notes, dependencies) must have terminal control characters stripped -
+// description and version notes keep their own newlines (SanitizeMultiline),
+// everything else is a single line.
+func TestE2E_InfoSanitizesHubFields(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+	resetFlags()
+
+	mockAPI := testutil.NewMockAPIHandler()
+	mockAPI.AddTheme(testutil.MockTheme{
+		ID:          "evil-id",
+		Author:      "testuser",
+		Slug:        "evil-theme",
+		Name:        "Evil\x1b[31mTheme",
+		Description: "line one\nline two",
+		Downloads:   1,
+		Versions: []testutil.MockVersion{
+			{
+				Version:      "1.0",
+				VersionNotes: "notes\x1b[0mhere\nsecond line",
+				Dependencies: []string{"dep\x1bone"},
+			},
+		},
+	})
+	env.SetupMockAPI(mockAPI)
+
+	out := testutil.CaptureOutput(t, func() {
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"info", "testuser/evil-theme"})
+		cmd.SetOut(new(bytes.Buffer))
+		require.NoError(t, cmd.Execute())
+	})
+
+	assert.NotContains(t, out, "\x1b[31m")
+	assert.NotContains(t, out, "\x1b[0m")
+	assert.NotContains(t, out, "dep\x1bone")
+	// The description's own newline must survive.
+	assert.Contains(t, out, "line one\nline two")
+	assert.Contains(t, out, "notes")
+	assert.Contains(t, out, "here\nsecond line")
 }

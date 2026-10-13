@@ -76,6 +76,50 @@ func promptConfirmation(prompt string) (bool, error) {
 	return false, nil
 }
 
+// printCustomCommandWarning prints the SECURITY WARNING block for a theme
+// whose [custom] commands can execute arbitrary shell code - the review
+// link, and the "apply at your own risk" line - without asking anything
+// itself. Extracted out of confirmCustomCommands so `stellar fork` (which
+// gates on the shared prompt reader, not promptConfirmation's own
+// os.Stdin-backed one - see cmd/prompt.go) can show the exact same warning
+// before its own y/N prompt.
+//
+// localPath is a file the content can already be reviewed at on disk (a
+// cached theme being previewed/rolled back to, say); pass "" for content
+// that has no local copy yet (freshly fetched from the hub, or - for
+// fork - the theme being copied FROM, which is reviewed on the hub either
+// way since forking never trusts a pre-existing local copy of the source).
+func printCustomCommandWarning(t *theme.Theme, localPath string) {
+	color.Red("\nSECURITY WARNING ")
+	color.Yellow("This theme contains [custom] commands that can execute arbitrary shell code.")
+	color.Yellow("Custom commands run on your system every time Starship renders your prompt.")
+	color.Yellow("Community themes aren't reviewed - you apply them at your own risk.")
+	fmt.Println()
+	color.Cyan("Before proceeding, you should review the config at:")
+	if localPath != "" {
+		fmt.Printf("  %s\n", localPath)
+		color.Cyan("or, if it's published, on stellar-hub:")
+	}
+	// Built from the same base the API client uses (paths.APIURL returns the
+	// site root - the "/api" segment is appended per request), so the link
+	// cannot drift away from the deployment the theme was actually fetched
+	// from, and follows STELLAR_API_URL in tests.
+	//
+	// ?review= opens the hub straight into the config viewer for this exact
+	// version with the [custom] sections highlighted, rather than dropping the
+	// user on the theme page to find them.
+	reviewURL := fmt.Sprintf(
+		"%s/%s/%s?review=%s",
+		paths.APIURL(api.BaseURL), t.Author, t.Name, t.Version,
+	)
+	fmt.Printf(
+		"  %s%s\n",
+		term.Hyperlink(reviewURL, reviewURL),
+		color.HiBlackString(term.ClickHint()),
+	)
+	fmt.Println()
+}
+
 // confirmCustomCommands warns the user and asks for confirmation when a
 // theme's [custom] commands can execute arbitrary shell code, before the
 // theme is ever applied, previewed or rolled back to. It is the single
@@ -101,33 +145,7 @@ func confirmCustomCommands(t *theme.Theme, validationResult theme.ValidationResu
 		return nil
 	}
 
-	color.Red("\nSECURITY WARNING ")
-	color.Yellow("This theme contains [custom] commands that can execute arbitrary shell code.")
-	color.Yellow("Custom commands run on your system every time Starship renders your prompt.")
-	fmt.Println()
-	color.Cyan("Before proceeding, you should review the config at:")
-	if localPath != "" {
-		fmt.Printf("  %s\n", localPath)
-		color.Cyan("or, if it's published, on stellar-hub:")
-	}
-	// Built from the same base the API client uses (paths.APIURL returns the
-	// site root - the "/api" segment is appended per request), so the link
-	// cannot drift away from the deployment the theme was actually fetched
-	// from, and follows STELLAR_API_URL in tests.
-	//
-	// ?review= opens the hub straight into the config viewer for this exact
-	// version with the [custom] sections highlighted, rather than dropping the
-	// user on the theme page to find them.
-	reviewURL := fmt.Sprintf(
-		"%s/%s/%s?review=%s",
-		paths.APIURL(api.BaseURL), t.Author, t.Name, t.Version,
-	)
-	fmt.Printf(
-		"  %s%s\n",
-		term.Hyperlink(reviewURL, reviewURL),
-		color.HiBlackString(term.ClickHint()),
-	)
-	fmt.Println()
+	printCustomCommandWarning(t, localPath)
 
 	ok, err := promptConfirmation(fmt.Sprintf("Do you trust this theme and want to %s it?", verb))
 	if err != nil {

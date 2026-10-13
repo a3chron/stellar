@@ -5,6 +5,7 @@ package paths
 import (
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Environment variable names for path overrides
@@ -26,6 +27,9 @@ const (
 	// EnvDoNotTrack is the cross-tool convention (consoledonottrack.com); a
 	// value of "1" disables the report the same way EnvNoTelemetry does.
 	EnvDoNotTrack = "DO_NOT_TRACK"
+	// EnvToken overrides the stored CLI auth token for the current base URL
+	// (see internal/auth), so CI can authenticate without a credentials.json.
+	EnvToken = "STELLAR_TOKEN"
 )
 
 // StellarHome returns the stellar configuration directory.
@@ -68,12 +72,18 @@ func TmpDir() string {
 }
 
 // APIURL returns the API base URL.
-// Returns STELLAR_API_URL env var if set, otherwise the default production URL
+// Returns STELLAR_API_URL env var if set, otherwise the default production URL.
+//
+// Any trailing slash is trimmed: every call site appends its own leading
+// "/api/...", so an env var like "http://127.0.0.1:3000/" would otherwise
+// produce "http://127.0.0.1:3000//api/..." - a double slash Next.js answers
+// with a 308 redirect, which the authed client's no-redirect policy then
+// reports as a bare request failure instead of ever reaching the route.
 func APIURL(defaultURL string) string {
 	if envURL := os.Getenv(EnvAPIURL); envURL != "" {
-		return envURL
+		return strings.TrimRight(envURL, "/")
 	}
-	return defaultURL
+	return strings.TrimRight(defaultURL, "/")
 }
 
 // ConfigPath returns the path to config.json within the stellar home directory
@@ -83,6 +93,16 @@ func ConfigPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(stellarHome, "config.json"), nil
+}
+
+// CredentialsPath returns the path to credentials.json within the stellar
+// home directory - see internal/auth for the format and how it's written.
+func CredentialsPath() (string, error) {
+	stellarHome, err := StellarHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(stellarHome, "credentials.json"), nil
 }
 
 // ThemeCachePath returns the cache path for a theme version

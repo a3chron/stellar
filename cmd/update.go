@@ -192,7 +192,7 @@ var updateCmd = &cobra.Command{
 		}
 
 		if !updateAvailable {
-			color.Green("You're already on the latest version (%s)", latestVersion)
+			color.Green("✓ You're already on the latest version (%s)", latestVersion)
 			return nil
 		}
 
@@ -287,7 +287,7 @@ var updateCmd = &cobra.Command{
 			cleanup()
 			return err
 		}
-		color.Green("Checksum verified successfully")
+		color.Green("✓ Checksum verified successfully")
 
 		// Step 6: Replace current binary (only after checksum verified)
 		if err := os.Chmod(tmpPath, 0755); err != nil {
@@ -305,7 +305,7 @@ var updateCmd = &cobra.Command{
 			return err
 		}
 
-		color.Green("Successfully updated to version %s!", latestVersion)
+		color.Green("✓ Successfully updated to version %s!", latestVersion)
 		return nil
 	},
 }

@@ -23,6 +23,13 @@ type Config struct {
 	// build still loads fine; the field is just never populated or read
 	// again.
 	DownloadedThemes []string `json:"downloaded_themes,omitempty"` // ["alice/rainbow", "bob/sunset"]
+	// AuthoredThemes records themes created locally via `stellar new`/`stellar
+	// fork` ("author/name", like DownloadedThemes). CleanCache skips these the
+	// same way it skips <author>/backup - a work-in-progress theme a user is
+	// actively editing (and hasn't published yet) is exactly the kind of thing
+	// `stellar clean`/`clean --all` must never silently delete, since there is
+	// no hub copy to re-download it from.
+	AuthoredThemes []string `json:"authored_themes,omitempty"`
 	// AppliedHash is the SHA-256 hex hash of the content stellar last wrote to
 	// starship.toml. It lets stellar recognize its own applied file regardless
 	// of apply mode (symlink vs copy) or OS, without depending on how the file
@@ -30,6 +37,14 @@ type Config struct {
 	// field existed; callers must treat that as "unknown" rather than
 	// "mismatch".
 	AppliedHash string `json:"applied_hash,omitempty"`
+
+	// Username caches the handle of the last successful `stellar auth`
+	// login, so `stellar new`/`stellar fork` can pick an author for a
+	// locally-created theme without a network round trip on every run. It is
+	// best-effort and may be stale (a username change on the hub, a login on
+	// another machine) - that only affects the *suggested* default author for
+	// a brand-new local theme, never anything already published.
+	Username string `json:"username,omitempty"`
 
 	// Telemetry identity (see internal/telemetry). InstallID is a random UUID
 	// minted once per install; InstallKind records whether config.json was
@@ -104,5 +119,23 @@ func (c *Config) HasDownloaded(themeID string) bool {
 func (c *Config) MarkDownloaded(themeID string) {
 	if !c.HasDownloaded(themeID) {
 		c.DownloadedThemes = append(c.DownloadedThemes, themeID)
+	}
+}
+
+// HasAuthored checks if a theme (author/slug) was created locally via
+// `stellar new`/`stellar fork`.
+func (c *Config) HasAuthored(themeID string) bool {
+	for _, t := range c.AuthoredThemes {
+		if t == themeID {
+			return true
+		}
+	}
+	return false
+}
+
+// MarkAuthored adds a theme to the authored list if not already present.
+func (c *Config) MarkAuthored(themeID string) {
+	if !c.HasAuthored(themeID) {
+		c.AuthoredThemes = append(c.AuthoredThemes, themeID)
 	}
 }

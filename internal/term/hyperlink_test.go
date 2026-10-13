@@ -59,3 +59,55 @@ func TestHyperlink(t *testing.T) {
 		}
 	})
 }
+
+// TestHyperlink_RefusesUnsafeURLs guards against a hub-provided URL (a draft
+// or theme link is never typed by stellar itself) smuggling control
+// characters into an OSC 8 escape sequence, or using a scheme a terminal
+// might act on in some unexpected way (file://, javascript:, a bare
+// "evil\x1b]8;;..." payload, ...). Any of these must fall back to plain
+// text, exactly like the NO_COLOR case already does.
+func TestHyperlink_RefusesUnsafeURLs(t *testing.T) {
+	restore := color.NoColor
+	color.NoColor = false
+	defer func() { color.NoColor = restore }()
+
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"javascript scheme", "javascript:alert(1)"},
+		{"file scheme", "file:///etc/passwd"},
+		{"no scheme at all", "stellar.a3chron.dev/a3chron/ctp-blue"},
+		{"embedded ESC", "https://stellar.a3chron.dev/\x1b]8;;http://evil.test\x1b\\x\x1b]8;;\x1b\\"},
+		{"embedded newline", "https://stellar.a3chron.dev/\nfake line"},
+		{"embedded DEL", "https://stellar.a3chron.dev/\x7f"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Hyperlink(tc.url, "click here")
+			if got != "click here" {
+				t.Errorf("Hyperlink(%q) = %q, want plain text only", tc.url, got)
+			}
+			if strings.ContainsAny(got, "\x1b\x7f") {
+				t.Errorf("Hyperlink(%q) leaked a control byte: %q", tc.url, got)
+			}
+		})
+	}
+
+	t.Run("still links a genuinely safe https URL", func(t *testing.T) {
+		const safeURL = "https://stellar.a3chron.dev/a3chron/ctp-blue?review=1.0"
+		got := Hyperlink(safeURL, safeURL)
+		if !strings.Contains(got, "\x1b]8;;"+safeURL) {
+			t.Errorf("Hyperlink() unexpectedly refused a safe url: %q", got)
+		}
+	})
+
+	t.Run("still links a genuinely safe http URL", func(t *testing.T) {
+		const httpURL = "http://127.0.0.1:3000/a3chron/ctp-blue"
+		got := Hyperlink(httpURL, httpURL)
+		if !strings.Contains(got, "\x1b]8;;"+httpURL) {
+			t.Errorf("Hyperlink() unexpectedly refused a safe http url: %q", got)
+		}
+	})
+}

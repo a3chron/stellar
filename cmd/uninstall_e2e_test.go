@@ -210,4 +210,59 @@ func TestE2E_Uninstall(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, mockAPI.Pings())
 	})
+
+	t.Run("Lists own themes and backups that would be lost", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		fakeBinary(t, env)
+		env.CreateThemeFile("me", "my-own-theme", "1.0", testutil.SampleTOML())
+		env.CreateThemeFile("me", "my-own-theme", "1.1", testutil.SampleTOML())
+		env.CreateThemeFile("me", "backup", "1.0", testutil.SampleTOML())
+		env.CreateConfig(`{"authored_themes": ["me/my-own-theme"]}`)
+
+		out, err := runUninstall(t, nil, "--yes")
+		require.NoError(t, err)
+		assert.Contains(t, out, "This will also delete")
+		assert.Contains(t, out, "me/my-own-theme (2 version(s))")
+		assert.Contains(t, out, "1 backup version(s)")
+		assert.Contains(t, out, "--keep-config")
+	})
+
+	t.Run("Stays quiet with nothing of the user's own", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		fakeBinary(t, env)
+		env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+		env.CreateConfig(`{"downloaded_themes": ["alice/rainbow"]}`)
+
+		out, err := runUninstall(t, nil, "--yes")
+		require.NoError(t, err)
+		assert.NotContains(t, out, "This will also delete")
+	})
+
+	t.Run("Says nothing with --keep-config", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		fakeBinary(t, env)
+		env.CreateThemeFile("me", "my-own-theme", "1.0", testutil.SampleTOML())
+		env.CreateConfig(`{"authored_themes": ["me/my-own-theme"]}`)
+
+		out, err := runUninstall(t, nil, "--yes", "--keep-config")
+		require.NoError(t, err)
+		assert.NotContains(t, out, "This will also delete")
+	})
+
+	t.Run("Shown before the confirmation too, without --yes", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		fakeBinary(t, env)
+		env.CreateThemeFile("me", "my-own-theme", "1.0", testutil.SampleTOML())
+		env.CreateConfig(`{"authored_themes": ["me/my-own-theme"]}`)
+
+		out, err := runUninstall(t, strings.NewReader("n\n"))
+		require.NoError(t, err)
+		assert.Contains(t, out, "This will also delete")
+		assert.Contains(t, out, "me/my-own-theme")
+		assert.Contains(t, out, "Aborted")
+	})
 }
