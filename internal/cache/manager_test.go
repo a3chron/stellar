@@ -154,3 +154,125 @@ func TestTmpCacheFunctions(t *testing.T) {
 	assert.Equal(t, expectedPath, TmpCachePath(th))
 	assert.Equal(t, content, env.ReadFile(expectedPath))
 }
+
+// =============================================================================
+// CleanCache / PlanClean
+// =============================================================================
+
+func TestCleanCache_PlainCleanKeepsOwnThemes(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+
+	handMade := env.CreateThemeFile("me", "my-theme", "1.0", testutil.SampleTOML())
+	downloaded := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+
+	result, err := CleanCache(CleanOptions{Downloaded: []string{"alice/rainbow"}})
+	require.NoError(t, err)
+
+	assert.Equal(t, CleanResult{DownloadedRemoved: 1, OwnRemoved: 0}, result)
+	assert.FileExists(t, handMade)
+	assert.NoFileExists(t, downloaded)
+}
+
+func TestCleanCache_AuthoredDownloadStaysOwn(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+
+	path := env.CreateThemeFile("me", "my-theme", "1.0", testutil.SampleTOML())
+
+	result, err := CleanCache(CleanOptions{
+		Downloaded: []string{"me/my-theme"},
+		Authored:   []string{"me/my-theme"},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, CleanResult{}, result)
+	assert.FileExists(t, path)
+}
+
+func TestCleanCache_IncludeOwnRemovesOwnThemes(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+
+	handMade := env.CreateThemeFile("me", "my-theme", "1.0", testutil.SampleTOML())
+	downloaded := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+
+	result, err := CleanCache(CleanOptions{
+		Downloaded: []string{"alice/rainbow"},
+		IncludeOwn: true,
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, CleanResult{DownloadedRemoved: 1, OwnRemoved: 1}, result)
+	assert.NoFileExists(t, handMade)
+	assert.NoFileExists(t, downloaded)
+}
+
+func TestCleanCache_KeepsCurrentPathUnlessAll(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+
+	currentPath := env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+
+	result, err := CleanCache(CleanOptions{
+		Downloaded: []string{"alice/rainbow"},
+		IncludeOwn: true,
+		KeepPath:   currentPath,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, CleanResult{}, result)
+	assert.FileExists(t, currentPath)
+
+	result, err = CleanCache(CleanOptions{
+		Downloaded: []string{"alice/rainbow"},
+		IncludeOwn: true,
+		KeepPath:   currentPath,
+		All:        true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, CleanResult{DownloadedRemoved: 1}, result)
+	assert.NoFileExists(t, currentPath)
+}
+
+func TestCleanCache_NeverRemovesBackups(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+
+	backupPath := env.CreateThemeFile("me", theme.BackupThemeName, "1.0", testutil.SampleTOML())
+
+	result, err := CleanCache(CleanOptions{
+		Downloaded: []string{"me/" + theme.BackupThemeName},
+		IncludeOwn: true,
+		All:        true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, CleanResult{}, result)
+	assert.FileExists(t, backupPath)
+}
+
+func TestPlanClean_ListsOwnThemesAndBackups(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+
+	env.CreateThemeFile("me", "my-theme", "1.0", testutil.SampleTOML())
+	env.CreateThemeFile("me", "my-theme", "1.1", testutil.SampleTOML())
+	env.CreateThemeFile("alice", "rainbow", "1.0", testutil.SampleTOML())
+	env.CreateThemeFile("me", theme.BackupThemeName, "1.0", testutil.SampleTOML())
+
+	plan, err := PlanClean(CleanOptions{Downloaded: []string{"alice/rainbow"}})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, plan.DownloadedCount)
+	assert.Equal(t, 1, plan.BackupVersions)
+	require.Len(t, plan.OwnThemes, 1)
+	assert.Equal(t, OwnTheme{ID: "me/my-theme", Versions: 2}, plan.OwnThemes[0])
+}
+
+func TestPlanClean_ExcludesCurrentUnlessAll(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+
+	currentPath := env.CreateThemeFile("me", "my-theme", "1.0", testutil.SampleTOML())
+
+	plan, err := PlanClean(CleanOptions{KeepPath: currentPath})
+	require.NoError(t, err)
+	assert.Empty(t, plan.OwnThemes)
+
+	plan, err = PlanClean(CleanOptions{KeepPath: currentPath, All: true})
+	require.NoError(t, err)
+	require.Len(t, plan.OwnThemes, 1)
+	assert.Equal(t, OwnTheme{ID: "me/my-theme", Versions: 1}, plan.OwnThemes[0])
+}

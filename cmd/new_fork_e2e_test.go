@@ -109,9 +109,10 @@ func TestE2E_Fork(t *testing.T) {
 }
 
 // TestE2E_AuthoredThemesSurviveClean guards the config.AuthoredThemes
-// protection: `stellar new`/`stellar fork` output must survive `stellar
-// clean --all` the same way <author>/backup already does, since there's no
-// hub copy to fall back to for a theme that was never published.
+// protection: `stellar new`/`stellar fork` output must survive every
+// `stellar clean` variant that doesn't pass --include-own, since there's no
+// hub copy to fall back to for a theme that was never published - the same
+// as a hand-made theme.
 func TestE2E_AuthoredThemesSurviveClean(t *testing.T) {
 	env := testutil.SetupTestEnv(t)
 	resetFlags()
@@ -121,16 +122,45 @@ func TestE2E_AuthoredThemesSurviveClean(t *testing.T) {
 	authoredPath := filepath.Join(env.StellarDir, "me", "my-theme", "1.0.toml")
 	require.True(t, env.FileExists(authoredPath))
 
-	// An ordinary downloaded/cached theme, to confirm clean --all still
-	// removes what it's supposed to.
+	// An ordinary downloaded theme, to confirm a plain clean --all still
+	// removes what it's supposed to (downloads, not own/authored themes).
 	ordinaryPath := env.CreateThemeFile("someone", "else-theme", "1.0", testutil.SampleTOML())
+	cfg, cerr := config.Load()
+	require.NoError(t, cerr)
+	cfg.MarkDownloaded("someone/else-theme")
+	require.NoError(t, cfg.Save())
 
 	out, err := runStellar(t, nil, "clean", "--all")
 	require.NoError(t, err)
-	assert.Contains(t, out, "Cleaned cache")
+	assert.Contains(t, out, "Removed 1 downloaded theme(s)")
 
-	assert.True(t, env.FileExists(authoredPath), "an authored (not yet published) theme must survive clean --all")
-	assert.False(t, env.FileExists(ordinaryPath), "an ordinary cached theme must still be removed by clean --all")
+	assert.True(t, env.FileExists(authoredPath), "an authored (not yet published) theme must survive a plain clean --all")
+	assert.False(t, env.FileExists(ordinaryPath), "a downloaded theme must still be removed by clean --all")
+
+	// --include-own is the only thing that removes it.
+	out, err = runStellar(t, nil, "clean", "--all", "--include-own", "--yes")
+	require.NoError(t, err)
+	assert.Contains(t, out, "Removed 1 of your own theme(s)")
+	assert.False(t, env.FileExists(authoredPath), "--include-own removes authored themes too")
+}
+
+// TestE2E_PublishedThenRedownloadedThemeStaysOwn guards the specific case
+// config.Config.AuthoredThemes exists for: a theme that's in BOTH
+// DownloadedThemes (you fetched it, e.g. on another machine) and
+// AuthoredThemes (you published it yourself) must still count as "own", not
+// a plain download - a plain `stellar clean` must never sweep it away just
+// because it also happens to be downloaded.
+func TestE2E_PublishedThenRedownloadedThemeStaysOwn(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+	resetFlags()
+
+	path := env.CreateThemeFile("me", "my-theme", "1.0", testutil.SampleTOML())
+	env.CreateConfig(`{"downloaded_themes": ["me/my-theme"], "authored_themes": ["me/my-theme"]}`)
+
+	out, err := runStellar(t, nil, "clean")
+	require.NoError(t, err)
+	assert.Contains(t, out, "Cache already clean")
+	assert.True(t, env.FileExists(path))
 }
 
 func TestE2E_ForkOfflineFallsBackToCache(t *testing.T) {

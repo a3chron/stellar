@@ -93,29 +93,182 @@ func ListCachedThemes() ([]string, error) {
 	return themes, nil
 }
 
-// CleanCache removes every cached theme except excludeCurrentPath (when
-// set), skipping <author>/backup and any "author/name" listed in
-// authoredThemes - see the comments below for why each is protected.
-func CleanCache(excludeCurrentPath string, authoredThemes []string) error {
+// CleanOptions controls what CleanCache (and PlanClean) consider removable.
+// ~/.config/stellar is both a download cache and where the README tells
+// people to keep their own themes, so the two have to be told apart: see
+// isDownloadOnly for exactly how.
+type CleanOptions struct {
+	// KeepPath is the cache path of the currently applied theme. It is kept
+	// regardless of every other rule below, unless All is set.
+	KeepPath string
+	// All also removes the currently applied theme (KeepPath is ignored).
+	All bool
+	// Downloaded lists "author/name" themes stellar itself downloaded
+	// (config.Config.DownloadedThemes).
+	Downloaded []string
+	// Authored lists "author/name" themes created locally via `stellar
+	// new`/`stellar fork` (config.Config.AuthoredThemes). A theme in both
+	// Downloaded and Authored - published, then re-downloaded - still
+	// counts as "own", not a plain download: see isDownloadOnly.
+	Authored []string
+	// IncludeOwn also removes "own" themes: anything isDownloadOnly doesn't
+	// recognize as a plain download (hand-made themes, `new`/`fork` output,
+	// and anything fetched by a stellar version from before this
+	// distinction existed).
+	IncludeOwn bool
+}
+
+// CleanResult reports what CleanCache actually removed, split the same way
+// the command's own output is: downloads never need a second thought, own
+// themes are the part a user might want to know got removed.
+type CleanResult struct {
+	DownloadedRemoved int
+	OwnRemoved        int
+}
+
+// OwnTheme summarizes one "own" author/name for the --include-own
+// confirmation prompt and the "kept" summary.
+type OwnTheme struct {
+	ID       string // "author/name"
+	Versions int
+}
+
+// CleanPlan is what CleanCache would do, computed without touching the
+// filesystem - used to build `stellar clean`'s --include-own confirmation
+// and its "kept" summary.
+type CleanPlan struct {
+	// DownloadedCount is how many cached download files would be removed -
+	// this happens regardless of IncludeOwn, so it never needs a confirm.
+	DownloadedCount int
+	// OwnThemes are the own themes IncludeOwn would remove, sorted by ID.
+	// Computed the same whether or not Options.IncludeOwn is actually set,
+	// so a caller can preview it before deciding.
+	OwnThemes []OwnTheme
+	// BackupVersions is how many <author>/backup version files are cached -
+	// never removed by any CleanCache variant, only by `stellar remove
+	// <author>/backup`.
+	BackupVersions int
+}
+
+// isDownloadOnly reports whether themeID ("author/name") counts as a plain
+// download stellar can always re-fetch from the hub: present in downloaded,
+// and NOT also in authored. A theme you published yourself and later
+// re-downloaded (e.g. on another machine) stays "yours" even though it's
+// technically also a download - re-running `stellar clean` must not treat
+// your own published theme as disposable just because you also have it
+// through `stellar apply`.
+func isDownloadOnly(themeID string, downloaded, authored map[string]bool) bool {
+	return downloaded[themeID] && !authored[themeID]
+}
+
+func toSet(items []string) map[string]bool {
+	set := make(map[string]bool, len(items))
+	for _, item := range items {
+		set[item] = true
+	}
+	return set
+}
+
+// cachedThemeFile is one classified entry from ListCachedThemes, shared by
+// CleanCache and PlanClean so the two can never disagree on what counts as
+// removable.
+type cachedThemeFile struct {
+	path      string
+	themeID   string // "author/name"
+	isBackup  bool
+	isOwn     bool // not isDownloadOnly
+	isCurrent bool // path == opts.KeepPath
+}
+
+// classifyCachedThemes walks every cached theme version and classifies it
+// against opts, without touching the filesystem beyond the read already
+// done by ListCachedThemes.
+func classifyCachedThemes(opts CleanOptions) ([]cachedThemeFile, error) {
 	themes, err := ListCachedThemes()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	authored := make(map[string]bool, len(authoredThemes))
-	for _, id := range authoredThemes {
-		authored[id] = true
-	}
+	downloaded := toSet(opts.Downloaded)
+	authored := toSet(opts.Authored)
 
-	// Track directories to potentially remove
-	dirsToCheck := make(map[string]bool)
-
+	out := make([]cachedThemeFile, 0, len(themes))
 	for _, themeID := range themes {
 		t, err := theme.ParseIdentifier(themeID)
 		if err != nil {
 			continue
 		}
+		path, err := t.CachePath()
+		if err != nil {
+			continue
+		}
+		id := fmt.Sprintf("%s/%s", t.Author, t.Name)
+		out = append(out, cachedThemeFile{
+			path:      path,
+			themeID:   id,
+			isBackup:  t.Name == theme.BackupThemeName,
+			isOwn:     !isDownloadOnly(id, downloaded, authored),
+			isCurrent: opts.KeepPath != "" && path == opts.KeepPath,
+		})
+	}
+	return out, nil
+}
 
+// PlanClean computes what CleanCache(opts) would do without touching the
+// filesystem, for `stellar clean`'s --include-own confirmation and its
+// "kept" summary. OwnThemes and BackupVersions are the same regardless of
+// opts.IncludeOwn, so a caller can ask "what WOULD --include-own remove"
+// before deciding whether to actually pass it.
+func PlanClean(opts CleanOptions) (CleanPlan, error) {
+	files, err := classifyCachedThemes(opts)
+	if err != nil {
+		return CleanPlan{}, err
+	}
+
+	var plan CleanPlan
+	ownVersions := make(map[string]int)
+
+	for _, f := range files {
+		if f.isBackup {
+			plan.BackupVersions++
+			continue
+		}
+		if !opts.All && f.isCurrent {
+			continue
+		}
+		if f.isOwn {
+			ownVersions[f.themeID]++
+		} else {
+			plan.DownloadedCount++
+		}
+	}
+
+	ids := make([]string, 0, len(ownVersions))
+	for id := range ownVersions {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		plan.OwnThemes = append(plan.OwnThemes, OwnTheme{ID: id, Versions: ownVersions[id]})
+	}
+
+	return plan, nil
+}
+
+// CleanCache removes cached theme files per opts: backups and (unless All)
+// the currently applied theme are always kept; a plain download is always
+// removed; an "own" theme (see isDownloadOnly) is removed only when
+// IncludeOwn is set.
+func CleanCache(opts CleanOptions) (CleanResult, error) {
+	files, err := classifyCachedThemes(opts)
+	if err != nil {
+		return CleanResult{}, err
+	}
+
+	var result CleanResult
+	dirsToCheck := make(map[string]bool)
+
+	for _, f := range files {
 		// Backups of the user's original config live at <author>/backup
 		// (see internal/symlink.backupOriginalConfig) and must survive
 		// cleaning: they're the only copy of whatever starship.toml the user
@@ -123,45 +276,36 @@ func CleanCache(excludeCurrentPath string, authoredThemes []string) error {
 		// restore hint stellar itself prints ("stellar apply
 		// <author>/backup@<version>") would become permanently
 		// unrecoverable, since "backup" isn't a real author on the hub and
-		// there's nothing to re-download. This applies to every author, and
-		// to every clean variant (CleanCache is the only removal path for
-		// both `stellar clean` and `stellar clean --all`; they differ only
-		// in excludeCurrentPath). Backups are still removable explicitly via
-		// `stellar remove <author>/backup[@version]`.
-		if t.Name == theme.BackupThemeName {
+		// there's nothing to re-download. Backups are still removable
+		// explicitly via `stellar remove <author>/backup[@version]`.
+		if f.isBackup {
 			continue
 		}
 
-		// Themes created locally via `stellar new`/`stellar fork`
-		// (config.Config.AuthoredThemes) are work in progress with no hub
-		// copy to re-download from - clean must never silently delete the
-		// only copy of a theme someone is actively authoring, the same
-		// reasoning that protects backups above.
-		if authored[fmt.Sprintf("%s/%s", t.Author, t.Name)] {
+		if !opts.All && f.isCurrent {
 			continue
 		}
 
-		path, err := t.CachePath()
-		if err != nil {
+		if f.isOwn && !opts.IncludeOwn {
 			continue
 		}
 
-		// Compare by actual file path
-		if excludeCurrentPath != "" && path == excludeCurrentPath {
+		if err := os.Remove(f.path); err != nil {
+			log.Printf("warning: failed to remove %s: %v", f.path, err)
 			continue
 		}
-
-		// Remove the theme file
-		if err := os.Remove(path); err != nil {
-			log.Printf("warning: failed to remove %s: %v", path, err)
+		if f.isOwn {
+			result.OwnRemoved++
+		} else {
+			result.DownloadedRemoved++
 		}
 
 		// Track parent directories for cleanup
-		themeDir := filepath.Dir(path) // e.g., ~/.config/stellar/author/theme
+		themeDir := filepath.Dir(f.path) // e.g., ~/.config/stellar/author/theme
 		dirsToCheck[themeDir] = true
 	}
 
-	// If removeDirectories, clean up empty theme and author directories
+	// Clean up empty theme and author directories
 	for themeDir := range dirsToCheck {
 		// Remove theme directory if empty
 		if isEmpty, _ := isDirEmpty(themeDir); isEmpty {
@@ -179,7 +323,7 @@ func CleanCache(excludeCurrentPath string, authoredThemes []string) error {
 		}
 	}
 
-	return nil
+	return result, nil
 }
 
 // ListAuthors returns the names of author directories under the stellar
