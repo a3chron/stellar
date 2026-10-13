@@ -31,14 +31,14 @@ type mockDraft struct {
 	themeSlug string
 
 	name, slug, description, group, colorMode, colorSchemeID *string
-	dependencies                                              []string
-	minStarshipVersion                                        *string
-	version, versionNotes                                     *string
-	config                                                     *string
-	configSource                                               *string
-	configUpdatedAt                                            *time.Time
-	screenshotURL                                              *string
-	source                                                     *string
+	dependencies                                             []string
+	minStarshipVersion                                       *string
+	version, versionNotes                                    *string
+	config                                                   *string
+	configSource                                             *string
+	configUpdatedAt                                          *time.Time
+	screenshotURL                                            *string
+	source                                                   *string
 
 	createdAt, updatedAt time.Time
 }
@@ -797,4 +797,37 @@ func (h *MockAPIHandler) handlePublishDraft(w http.ResponseWriter, username, cod
 			"url": fmt.Sprintf("https://mock.stellar-hub.test/%s/%s", username, d.themeSlug),
 		})
 	}
+}
+
+// --- test-only helpers (not part of any real stellar-hub behavior) ---------
+
+// SeedThemeDraft creates a theme draft directly, bypassing the CLI, for
+// tests that need to attach to a draft that already existed - as if started
+// on the web - rather than one the CLI itself just created. Returns the
+// draft's code.
+func (h *MockAPIHandler) SeedThemeDraft(owner, slug string, name *string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	code := h.nextDraftCode()
+	now := time.Now().UTC()
+	h.drafts[code] = &mockDraft{
+		code: code, kind: "theme", owner: owner, slug: &slug, name: name,
+		createdAt: now, updatedAt: now, dependencies: []string{},
+	}
+	return code
+}
+
+// DraftCount returns how many live drafts username currently owns.
+func (h *MockAPIHandler) DraftCount(username string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	n := 0
+	for _, d := range h.drafts {
+		if d.owner == username {
+			n++
+		}
+	}
+	return n
 }
