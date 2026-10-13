@@ -7,8 +7,8 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"strings"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/a3chron/stellar/internal/api"
