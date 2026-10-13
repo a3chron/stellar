@@ -175,6 +175,16 @@ stellar update
 
 # Remove stellar from this machine (see Uninstall above)
 stellar uninstall
+
+# Log in to stellar-hub (see Publishing Your Themes below)
+stellar auth
+
+# Start a new theme, or copy an existing one to build on
+stellar new my-theme
+stellar fork a3chron/ctp-blue my-blue
+
+# Upload a local theme as a draft (new theme or new version, works either way)
+stellar publish my-theme
 ```
 
 ### Confirmations and `--force`
@@ -240,10 +250,48 @@ You can see all available community themes at the [stellar hub](https://stellar.
 
 #### Publishing Your Themes
 
-I am working on getting a `stellar publish` command, but currently you will have to publish your theme at [the upload form](https://stellar.a3chron.dev/upload).
+```bash
+# Log in once (opens a browser to approve this device)
+stellar auth
 
-If you want to update a theme, you can do so in your stellar hub settings, either "Edit Metadata" (The pencil icon), or "Update" (The upload icon), 
-with beeing able to update either metadata like the theme name, description, prerequesites etc., or upload a new config version with version notes.
+# Start a brand-new theme, or copy one you want to build on
+stellar new my-theme
+stellar fork a3chron/ctp-blue my-blue
+
+# Upload it - this starts a draft on the hub either way, new theme or new version
+stellar publish my-theme
+
+# ...or finish it immediately, skipping the web step
+stellar publish my-theme --publish --name "My Theme" --screenshot ./shot.png
+```
+
+`stellar publish <path|author/slug[@version]|name>` uploads a local theme as
+a draft: if it isn't on the hub yet under your name, this starts a new
+theme; if it's already yours, it starts a new version instead - the same
+command handles both. By default it prints a link to finish the draft (name,
+description, screenshot, etc.) on the hub; pass `--publish` to fill in
+anything still missing right from the CLI (prompting interactively, or
+failing with the flag name to pass non-interactively) and publish
+immediately. See `stellar publish --help` for the full set of flags
+(`--slug`, `--name`, `--description`, `--group`, `--color-mode`, `--dep`,
+`--min-starship`, `--screenshot`, `--version`, `--notes`, `--draft`, `--yes`).
+
+`stellar new [author/]name` creates an empty starter theme under your
+stellar cache (your logged-in username by default), and
+`stellar fork author/slug[@version] [[author/]name]` copies an existing
+theme - from the hub, or your local cache if you're offline - into one you
+own and can edit freely. Both are protected from `stellar clean`, same as
+your [backups](#automatic-backup-of-your-original-config).
+
+Your login is stored at `~/.config/stellar/credentials.json` (readable only
+by you). `stellar auth status` shows who you're logged in as,
+`stellar auth logout` revokes it, and `stellar uninstall` revokes it
+automatically unless you pass `--keep-config`.
+
+Updating an existing theme (new version, edited metadata, etc.) is also just
+`stellar publish` - there's no separate update command. You can still do
+either from your stellar hub settings instead, if you'd rather not use the
+CLI.
 
 ## Local configs
 
@@ -448,15 +496,13 @@ When adding new CLI features, please add corresponding E2E tests in `cmd/e2e_tes
 - [ ] **`stellar preview` on Windows**: `cmd/preview.go` only spawns terminals on macOS/Linux. On Windows (and anywhere else no terminal could be opened) it now prints the exact command to preview manually instead of erroring, but still doesn't open a window itself - needs a Windows Terminal / PowerShell branch that opens a shell with `STARSHIP_CONFIG` set.
 - [ ] **Windows packaging**: consider scoop/winget packaging (leftover `stellar.exe.old` from self-update is already cleaned up on the next run).
 - [x] **CI test job**: `go vet` and `go test` (with `-race` on Linux) run on every pull request and again before goreleaser, on both `ubuntu-latest` and `windows-latest`, so a tag can't publish a failing build and the copy path is guarded natively.
-- [ ] **`stellar publish` command**: Upload local themes directly to stellar-hub
-  - Challenge: Need to implement CLI authentication (OAuth flow with browser redirect or API keys)
-  - Would read from `~/.config/stellar/<author>/<theme>/<version>.toml`
-  - Interactive prompts for metadata (name, description, screenshot, etc.)
-  - Skip complex fields initially (e.g., color scheme selection - add later)
-- [ ] **`stellar update <theme>` command**: Update an existing theme on stellar-hub with a new version
-  - Requires authentication (same challenge as publish)
-  - Upload new version of already published theme
-  - Interactive prompts for version notes, dependencies, etc.
+- [x] **`stellar publish` command**: Upload local themes directly to stellar-hub
+  - `stellar auth` does the browser device-login, storing a bearer token in `credentials.json`
+  - Reads from `~/.config/stellar/<author>/<theme>/<version>.toml` (or a bare path, or `author/slug[@version]`)
+  - Interactive prompts for metadata (name, description, screenshot, etc.), or flags for non-interactive use
+  - Uploads into a draft by default (finish it on the hub), or `--publish` to finish immediately
+- [x] **`stellar update <theme>` command**: Update an existing theme on stellar-hub with a new version
+  - This ended up folded into `stellar publish`: publishing a theme that's already yours starts a new version instead of a new theme, so there's no separate update command
 - [ ] Add progress bars for downloads
 - [ ] **Get stellar into nixpkgs**: the flake is nixified - `nix build` and `nix run` produce a
   real binary with version ldflags and installed bash/zsh/fish completions, and
