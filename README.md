@@ -202,13 +202,18 @@ stellar publish my-theme
 
 ### Confirmations and `--force`
 
-`apply`, `preview` and `rollback` all show a security warning and ask
-`Do you trust this theme and want to apply/preview/restore it? [y/N]:`
-before ever running starship against a theme that contains `[custom]`
-commands (those can execute arbitrary shell code on every prompt render).
-This only ever fires for genuinely new content: a theme that's already
-cached locally is never re-prompted, only a fresh download from the hub is
-(rollback's re-download-when-missing path included).
+`apply`, `preview`, `rollback` and `fork` all show a security warning and ask
+`Do you trust this theme and want to apply/preview/restore/fork it? [y/N]:`
+before trusting a theme that contains `[custom]` commands (those can
+execute arbitrary shell code on every prompt render).
+
+For `apply`/`preview`/`rollback` this only ever fires for genuinely new
+content: a theme that's already cached locally is never re-prompted, only a
+fresh download from the hub is (rollback's re-download-when-missing path
+included). `fork` is different: it always prompts when the source has
+`[custom]` commands, even from your own local cache - once forked, it's
+content you now own, and `apply` never prompts about it again, so this is
+the only chance to see the warning.
 
 - `y`/`yes` (however it reaches stdin - typed, piped, or redirected)
   confirms; anything else declines and the command aborts with a non-zero
@@ -221,14 +226,16 @@ cached locally is never re-prompted, only a fresh download from the hub is
   and terminals that don't look like a TTY (e.g. mintty/Git Bash on
   Windows) still work fine, since they do have a real answer to read.
 
-Pass `--force` (`-f`) to `apply`, `preview` or `rollback` to skip that
-confirmation outright. `--force` also has a second effect: it skips TOML
-validation (and the 100KB size cap) for a theme that's **already on
-disk** - cached, local/hand-written, or (for `rollback`) the previous
-theme - printing a yellow warning instead of refusing, so you can force
-through your own work-in-progress config. A **freshly downloaded** theme
-is always validated in full regardless of `--force`; only the
-`[custom]`-command confirmation is skippable for that content.
+Pass `--force` (`-f`) to `apply`, `preview`, `rollback` or `fork` to skip
+that confirmation outright. For `apply`/`preview`/`rollback`, `--force` also
+has a second effect: it skips TOML validation (and the 100KB size cap) for a
+theme that's **already on disk** - cached, local/hand-written, or (for
+`rollback`) the previous theme - printing a yellow warning instead of
+refusing, so you can force through your own work-in-progress config. A
+**freshly downloaded** theme is always validated in full regardless of
+`--force`; only the `[custom]`-command confirmation is skippable for that
+content. `fork`'s `--force` only skips the confirmation - a theme with
+invalid TOML is always refused, never force-copied.
 
 `stellar remove` also has `--force`, with an unrelated meaning: it lets you
 remove the currently active theme (normally refused).
@@ -293,17 +300,29 @@ immediately. See `stellar publish --help` for the full set of flags
 stellar cache (your logged-in username by default), and
 `stellar fork author/slug[@version] [[author/]name]` copies an existing
 theme - from the hub, or your local cache if you're offline - into one you
-own and can edit freely. Like `apply`, `preview` and `rollback`, it shows the
-`[custom]`-command security warning (and asks to confirm) before copying a
-theme that runs shell commands; pass `--force`/`-f` to skip that. A plain
-`stellar clean` never removes a `new`/`fork` theme (`--include-own` does);
-your [backups](#automatic-backup-of-your-original-config) stay protected
-even then.
+own and can edit freely. Either way, the theme name is normalized to the
+hub's slug form (lowercase letters, digits and dashes - the same rule
+`stellar publish` applies to a slug), printing a note when that changed what
+you typed; the author segment is kept exactly as given. Like `apply`,
+`preview` and `rollback`, `fork` shows the `[custom]`-command security
+warning (and asks to confirm) before copying a theme that runs shell
+commands; pass `--force`/`-f` to skip that. A plain `stellar clean` never
+removes a `new`/`fork` theme (`--include-own` does); your
+[backups](#automatic-backup-of-your-original-config) stay protected even
+then.
 
 Your login is stored at `~/.config/stellar/credentials.json` (readable only
 by you). `stellar auth status` shows who you're logged in as,
 `stellar auth logout` revokes it, and `stellar uninstall` revokes it
 automatically unless you pass `--keep-config`.
+
+In CI (or anywhere else `stellar auth`'s interactive browser flow doesn't
+make sense), set `STELLAR_TOKEN` to a token instead - every command that
+talks to stellar-hub uses it in place of the stored credential, with no
+`stellar auth` step needed. It's never written to disk and never revoked by
+`stellar auth logout`/`stellar uninstall` (there's nothing stored to revoke);
+unset it yourself, or revoke it from your hub settings, when it's no longer
+needed.
 
 Updating an existing theme (new version, edited metadata, etc.) is also just
 `stellar publish` - there's no separate update command. You can still do
