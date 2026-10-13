@@ -50,8 +50,8 @@ Without a destination name, the theme keeps its slug under your logged-in
 		if err != nil {
 			return err
 		}
-		if _, statErr := os.Stat(destPath); statErr == nil {
-			return fmt.Errorf("%s/%s already exists at %s - pick another name", author, name, destPath)
+		if err := ensureFreshThemeDir(author, name, filepath.Dir(destPath)); err != nil {
+			return err
 		}
 
 		cfg, err := config.Load()
@@ -123,7 +123,7 @@ Without a destination name, the theme keeps its slug under your logged-in
 
 		sourceURL := fmt.Sprintf("%s/%s/%s", paths.APIURL(api.BaseURL), t.Author, t.Name)
 		header := fmt.Sprintf("# Forked from %s (%s)\n\n", t.String(), sourceURL)
-		if err := os.WriteFile(destPath, []byte(header+content), 0644); err != nil {
+		if err := writeNewThemeFile(destPath, []byte(header+content)); err != nil {
 			return err
 		}
 

@@ -47,8 +47,8 @@ Without an author prefix, the theme is created under your logged-in username
 			return err
 		}
 
-		if _, statErr := os.Stat(path); statErr == nil {
-			return fmt.Errorf("%s/%s already exists at %s - pick another name, or edit it directly", author, name, path)
+		if err := ensureFreshThemeDir(author, name, filepath.Dir(path)); err != nil {
+			return err
 		}
 
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
@@ -57,7 +57,7 @@ Without an author prefix, the theme is created under your logged-in username
 
 		identifier := fmt.Sprintf("%s/%s", author, name)
 		content := fmt.Sprintf(starterConfigTemplate, name, identifier)
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		if err := writeNewThemeFile(path, []byte(content)); err != nil {
 			return err
 		}
 

@@ -148,3 +148,60 @@ func TestE2E_ForkOfflineFallsBackToCache(t *testing.T) {
 	destPath := filepath.Join(env.StellarDir, "me", "my-rainbow", "1.0.toml")
 	assert.True(t, env.FileExists(destPath))
 }
+
+// A theme folder that already exists - even without a 1.0.toml - is someone's
+// theme: neither command may add a file to it, let alone replace one.
+func TestE2E_NewAndForkLeaveExistingThemeFoldersAlone(t *testing.T) {
+	own := testutil.SampleTOML() + "\n# my own work\n"
+
+	t.Run("new", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		env.CreateThemeFile("me", "my-theme", "2.0", own)
+
+		_, err := runStellar(t, nil, "new", "me/my-theme")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "already exists")
+
+		dir := filepath.Join(env.StellarDir, "me", "my-theme")
+		assert.False(t, env.FileExists(filepath.Join(dir, "1.0.toml")))
+		assert.Equal(t, own, env.ReadFile(filepath.Join(dir, "2.0.toml")))
+	})
+
+	t.Run("fork", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+		env.CreateConfig(`{"username": "me"}`)
+		env.CreateThemeFile("me", "my-blue", "2.0", own)
+		before := mockAPI.GetDownloadCount("testuser", "sample-theme")
+
+		_, err := runStellar(t, nil, "fork", "testuser/sample-theme@1.2", "my-blue")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "already exists")
+
+		dir := filepath.Join(env.StellarDir, "me", "my-blue")
+		assert.False(t, env.FileExists(filepath.Join(dir, "1.0.toml")))
+		assert.Equal(t, own, env.ReadFile(filepath.Join(dir, "2.0.toml")))
+		// Refused before downloading anything.
+		assert.Equal(t, before, mockAPI.GetDownloadCount("testuser", "sample-theme"))
+	})
+}
+
+func TestWriteNewThemeFileNeverOverwrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "1.0.toml")
+	require.NoError(t, os.WriteFile(path, []byte("original"), 0644))
+
+	err := writeNewThemeFile(path, []byte("replacement"))
+	require.Error(t, err)
+	data, rerr := os.ReadFile(path)
+	require.NoError(t, rerr)
+	assert.Equal(t, "original", string(data))
+
+	fresh := filepath.Join(filepath.Dir(path), "2.0.toml")
+	require.NoError(t, writeNewThemeFile(fresh, []byte("new")))
+	data, rerr = os.ReadFile(fresh)
+	require.NoError(t, rerr)
+	assert.Equal(t, "new", string(data))
+}
