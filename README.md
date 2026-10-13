@@ -122,7 +122,10 @@ and the binary are removed. Restore a backup with `stellar apply <username>/back
 Unless you pass `--keep-config`, stellar first lists any of your own themes
 and config backups that are about to go with it (it never lists downloaded
 themes - those you can always get back with `stellar apply`), so you know
-to pass `--keep-config` first if you want to keep them.
+to pass `--keep-config` first if you want to keep them. It also logs this
+machine out of stellar-hub (revoking every login `credentials.json` has
+stored), printing a settings link to revoke it by hand if that fails (e.g.
+offline).
 
 ## Why use
 
@@ -290,9 +293,12 @@ immediately. See `stellar publish --help` for the full set of flags
 stellar cache (your logged-in username by default), and
 `stellar fork author/slug[@version] [[author/]name]` copies an existing
 theme - from the hub, or your local cache if you're offline - into one you
-own and can edit freely. A plain `stellar clean` never removes either
-(`--include-own` does); your [backups](#automatic-backup-of-your-original-config)
-stay protected even then.
+own and can edit freely. Like `apply`, `preview` and `rollback`, it shows the
+`[custom]`-command security warning (and asks to confirm) before copying a
+theme that runs shell commands; pass `--force`/`-f` to skip that. A plain
+`stellar clean` never removes a `new`/`fork` theme (`--include-own` does);
+your [backups](#automatic-backup-of-your-original-config) stay protected
+even then.
 
 Your login is stored at `~/.config/stellar/credentials.json` (readable only
 by you). `stellar auth status` shows who you're logged in as,
