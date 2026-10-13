@@ -2139,6 +2139,7 @@ func TestE2E_ApplySecurityWarningReviewLink(t *testing.T) {
 		})
 
 		assert.Contains(t, output, "SECURITY WARNING")
+		assert.Contains(t, output, "Community themes aren't reviewed - you apply them at your own risk.")
 
 		// Built from the same base the API client used, so it follows
 		// STELLAR_API_URL here instead of pointing at production.

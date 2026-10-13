@@ -104,6 +104,7 @@ func confirmCustomCommands(t *theme.Theme, validationResult theme.ValidationResu
 	color.Red("\nSECURITY WARNING ")
 	color.Yellow("This theme contains [custom] commands that can execute arbitrary shell code.")
 	color.Yellow("Custom commands run on your system every time Starship renders your prompt.")
+	color.Yellow("Community themes aren't reviewed - you apply them at your own risk.")
 	fmt.Println()
 	color.Cyan("Before proceeding, you should review the config at:")
 	if localPath != "" {
