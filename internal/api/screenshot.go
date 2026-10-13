@@ -43,6 +43,13 @@ func DetectImageContentType(data []byte) string {
 	}
 }
 
+// FormatMB renders a byte count as a human-friendly "N.N MB" string, shared
+// by this package's own too-large error and cmd/publish.go's local
+// pre-check, so the two can never disagree on how a size is phrased.
+func FormatMB(bytes int) string {
+	return fmt.Sprintf("%.1f MB", float64(bytes)/(1024*1024))
+}
+
 // extForContentType returns a plausible filename extension for the
 // multipart part's Content-Disposition - cosmetic only, since the hub
 // decides the actual type from the part's Content-Type header, not the
@@ -66,13 +73,21 @@ func extForContentType(contentType string) string {
 // application/octet-stream). Returns a local error without making a request
 // at all if the bytes don't look like a PNG/JPEG/WebP - the hub would reject
 // it anyway, and this avoids uploading up to 4MB just to find that out.
-func (c *Client) UploadScreenshot(code string, data []byte) (*Draft, error) {
+// filename is used only to name the file in an error message (cmd/publish.go
+// passes the screenshot's base name) - pass "" for a generic "the
+// screenshot" in its place.
+func (c *Client) UploadScreenshot(code, filename string, data []byte) (*Draft, error) {
+	what := filename
+	if what == "" {
+		what = "the screenshot"
+	}
+
 	contentType := DetectImageContentType(data)
 	if contentType == "" {
-		return nil, fmt.Errorf("not a PNG, JPEG or WebP image")
+		return nil, fmt.Errorf("%s doesn't look like a PNG, JPEG or WebP image", what)
 	}
 	if len(data) > MaxScreenshotBytes {
-		return nil, fmt.Errorf("screenshot too large (max %d bytes)", MaxScreenshotBytes)
+		return nil, fmt.Errorf("%s is %s - screenshots can be at most %s", what, FormatMB(len(data)), FormatMB(MaxScreenshotBytes))
 	}
 
 	var buf bytes.Buffer

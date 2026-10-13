@@ -69,13 +69,14 @@ func init() {
 	publishCmd.Flags().StringVar(&publishGroup, "group", "", "Theme group/category")
 	publishCmd.Flags().StringVar(&publishColorMode, "color-mode", "", "dark, light, or both")
 	publishCmd.Flags().StringArrayVar(&publishDeps, "dep", nil, "A dependency theme requires (repeatable)")
-	publishCmd.Flags().StringVar(&publishMinStarship, "min-starship", "", "Minimum starship version required")
+	publishCmd.Flags().StringVar(&publishMinStarship, "min-starship", "", "Minimum starship version required (X.Y.Z)")
 	publishCmd.Flags().StringVar(&publishScreenshot, "screenshot", "", "Path to a screenshot (PNG/JPEG/WebP, max 4MB)")
 	publishCmd.Flags().StringVar(&publishVersion, "version", "", "Version to publish (default: from the file, or auto-bumped)")
 	publishCmd.Flags().StringVar(&publishNotes, "notes", "", "Version notes")
 	publishCmd.Flags().StringVar(&publishDraftCode, "draft", "", "Attach to an existing draft by its code")
 	publishCmd.Flags().BoolVar(&publishDoPublish, "publish", false, "Finish and publish immediately instead of leaving a draft")
-	publishCmd.Flags().BoolVarP(&publishYes, "yes", "y", false, "Never prompt; assume yes and fail instead of asking")
+	publishCmd.Flags().BoolVarP(&publishYes, "yes", "y", false,
+		"Never prompt: confirm everything and use defaults (fails if a required value has no default)")
 
 	publishCmd.ValidArgsFunction = publishIdentifierArgs
 }
@@ -91,15 +92,67 @@ func publishIdentifierArgs(cmd *cobra.Command, args []string, toComplete string)
 	return candidates, cobra.ShellCompDirectiveDefault
 }
 
+// --- flag validation ---------------------------------------------------------
+
+var (
+	minStarshipFlagRe = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+	versionFlagRe     = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)$`)
+	draftCodeRe       = regexp.MustCompile(`^[2-9A-HJ-NP-Z]{6}$`)
+)
+
+// validatePublishFlags checks every flag's shape before anything else runs -
+// no file is read, no request is made - so a typo is reported immediately
+// and by name, rather than surfacing later as a confusing 400 from the hub
+// (or, for --draft, a request for a code that was never going to be valid).
+func validatePublishFlags() error {
+	if publishColorMode != "" {
+		switch publishColorMode {
+		case "dark", "light", "both":
+		default:
+			return fmt.Errorf("--color-mode must be dark, light, or both (got %q)", publishColorMode)
+		}
+	}
+	if publishMinStarship != "" && !minStarshipFlagRe.MatchString(publishMinStarship) {
+		return fmt.Errorf("--min-starship must look like X.Y.Z (got %q)", publishMinStarship)
+	}
+	if publishVersion != "" && !versionFlagRe.MatchString(normalizeVersionFlag(publishVersion)) {
+		return fmt.Errorf("--version must look like X.Y (got %q)", publishVersion)
+	}
+	if publishDraftCode != "" && !draftCodeRe.MatchString(strings.ToUpper(publishDraftCode)) {
+		return fmt.Errorf("--draft must be a 6-character draft code, e.g. K7QF2M (got %q)", publishDraftCode)
+	}
+	return nil
+}
+
 func runPublish(cmd *cobra.Command, args []string) error {
+	if err := validatePublishFlags(); err != nil {
+		return &usageError{err: err}
+	}
+
 	r := newPromptReader(cmd)
 	tty := isTerminal(cmd.InOrStdin())
+	// --yes means never prompt, full stop: every value prompt below is
+	// gated on "interactive", not raw tty, so --yes behaves exactly like a
+	// non-interactive run even when stdin genuinely is a terminal.
+	// Confirmations are unaffected here - they already check publishYes
+	// themselves and answer yes outright.
+	interactive := tty && !publishYes
 
-	src, err := resolvePublishSource(r, tty, args[0])
+	src, err := resolvePublishSource(r, interactive, args[0])
 	if err != nil {
 		return err
 	}
 	fmt.Printf("Using %s\n", src.path)
+
+	// Recorded before any network call: a theme stellar never fetched from
+	// anywhere must never be mistaken for a plain download (which
+	// `apply --update`/`clean` would otherwise treat it as) just because it
+	// happens to be getting published.
+	if src.author != "" && src.name != "" {
+		if merr := markSourceAuthored(src); merr != nil {
+			color.Yellow("Warning: couldn't record %s/%s as authored (stellar clean may remove it): %v", src.author, src.name, merr)
+		}
+	}
 
 	content, validation, err := loadAndCheckConfig(src.path)
 	if err != nil {
@@ -126,41 +179,54 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	if cerr != nil {
 		cfgData = &config.Config{}
 	}
-	if src.author != "" && src.author != me.Username {
+	// Case-insensitively, matching how the hub itself compares usernames.
+	if src.author != "" && !strings.EqualFold(src.author, me.Username) {
 		themeID := fmt.Sprintf("%s/%s", src.author, src.name)
 		if cfgData.HasDownloaded(themeID) {
 			return fmt.Errorf("%s is %s's theme - use `stellar fork %s` to make your own editable copy", themeID, src.author, themeID)
 		}
 	}
 
-	slug, err := resolvePublishSlug(r, tty, src)
-	if err != nil {
-		return err
-	}
-	if slug == theme.BackupThemeName {
-		return fmt.Errorf("the slug %q is reserved for stellar's own config backups - pick another with --slug", slug)
+	// --draft skips slug resolution entirely: the draft's identity is
+	// already fixed by its code, and deriving (or worse, prompting for) a
+	// slug that's never actually used would be pure noise - this is exactly
+	// what the wizard's own "stellar publish ./path/to/starship.toml --draft
+	// CODE" suggestion needs to just work non-interactively.
+	var slug string
+	if publishDraftCode == "" {
+		slug, err = resolvePublishSlug(r, interactive, src)
+		if err != nil {
+			return err
+		}
+		if slug == theme.BackupThemeName {
+			return fmt.Errorf("the slug %q is reserved for stellar's own config backups - pick another with --slug", slug)
+		}
 	}
 
 	client := api.NewAuthedClient(token)
-	draft, err := resolveOrCreateDraft(r, tty, client, me, slug, src, content)
+	draft, err := resolveOrCreateDraft(r, interactive, client, me, slug, src, content)
 	if err != nil {
 		return err
 	}
 
 	if len(screenshotData) > 0 {
-		updated, uerr := client.UploadScreenshot(draft.Code, screenshotData)
-		if uerr != nil {
-			return wrapHubAPIError(uerr)
+		if draft.Kind == api.DraftKindVersion {
+			color.Yellow("Note: version drafts use the theme's existing screenshot - skipping --screenshot.")
+		} else {
+			updated, uerr := client.UploadScreenshot(draft.Code, filepath.Base(publishScreenshot), screenshotData)
+			if uerr != nil {
+				return draftSavedHint(wrapHubAPIError(uerr), draft)
+			}
+			draft = updated
 		}
-		draft = updated
 	}
 
 	if !publishDoPublish {
-		printDraftSummary(draft)
+		printDraftSummary(draft, me.Username)
 		return nil
 	}
 
-	draft, err = fillMissingForPublish(r, tty, client, draft)
+	draft, err = fillMissingForPublish(r, interactive, client, draft)
 	if err != nil {
 		return draftSavedHint(err, draft)
 	}
@@ -170,9 +236,30 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		return draftSavedHint(wrapHubAPIError(perr), draft)
 	}
 
-	color.Green("✓ Published %s/%s@%s", result.Author, result.Slug, result.Version)
+	author := term.SanitizeForTerminal(result.Author)
+	resultSlug := term.SanitizeForTerminal(result.Slug)
+	version := term.SanitizeForTerminal(result.Version)
+	color.Green("✓ Published %s/%s@%s", author, resultSlug, version)
 	fmt.Printf("  %s%s\n", term.Hyperlink(result.URL, result.URL), color.HiBlackString(term.ClickHint()))
 	return nil
+}
+
+// markSourceAuthored records "author/name" as authored (config.Config.
+// AuthoredThemes) before any network call - see runPublish. It deliberately
+// does NOT fall back to an empty *config.Config on a load failure: saving
+// one over a config.json that merely failed to *read* would silently wipe
+// the user's real current/downloaded-theme state.
+func markSourceAuthored(src *publishSource) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	themeID := fmt.Sprintf("%s/%s", src.author, src.name)
+	if cfg.HasAuthored(themeID) {
+		return nil
+	}
+	cfg.MarkAuthored(themeID)
+	return cfg.Save()
 }
 
 // --- source resolution -----------------------------------------------------
@@ -194,7 +281,7 @@ var versionFilenameRe = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)$`)
 // version or falls back to starship.toml), then an "author/slug[@version]"
 // identifier already in the local cache, then a bare name searched across
 // every local author.
-func resolvePublishSource(r *bufio.Reader, tty bool, arg string) (*publishSource, error) {
+func resolvePublishSource(r *bufio.Reader, interactive bool, arg string) (*publishSource, error) {
 	if path, isPath, err := resolveExistingPath(arg); isPath {
 		if err != nil {
 			return nil, err
@@ -234,6 +321,9 @@ func resolvePublishSource(r *bufio.Reader, tty bool, arg string) (*publishSource
 
 	chosen := matches[0]
 	if len(matches) > 1 {
+		if !interactive {
+			return nil, noAnswerError("the full path to the theme file")
+		}
 		labels := make([]string, len(matches))
 		for i, m := range matches {
 			labels[i] = fmt.Sprintf("%s/%s", m.author, m.name)
@@ -256,11 +346,46 @@ func resolvePublishSource(r *bufio.Reader, tty bool, arg string) (*publishSource
 	return sourceFromPath(p)
 }
 
+// highestVersionedTomlInDir returns the path of the highest "<X.Y>.toml"
+// file directly in dir, or "" if none exist. Unlike
+// theme.FindLatestLocalVersion (which treats ANY *.toml filename as a
+// candidate and falls back to plain lexicographic ordering for the ones
+// that aren't numeric), this never lets an unrelated file outrank the
+// theme's own versioned config just because its name happens to sort later
+// - a "zellij.toml" sitting next to "starship.toml" must never be picked
+// over it.
+func highestVersionedTomlInDir(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+	best := ""
+	bestStem := ""
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		stem := strings.TrimSuffix(e.Name(), ".toml")
+		if stem == e.Name() || !versionFilenameRe.MatchString(stem) {
+			continue
+		}
+		if best == "" || theme.CompareSemver(stem, bestStem) > 0 {
+			best = filepath.Join(dir, e.Name())
+			bestStem = stem
+		}
+	}
+	return best, nil
+}
+
 // resolveExistingPath reports whether arg is (or resolves, via symlinks, to)
 // an existing file or directory. isPath is true whenever arg looks like a
 // path attempt at all (it exists on disk) - a directory with nothing usable
 // in it is still isPath=true, with err set, since nothing else in the
 // precedence order would make sense of it either.
+//
+// For a directory, only a proper "<X.Y>.toml" (the highest one) or
+// "starship.toml" is ever picked - never some other, unrelated .toml file
+// that merely happens to sort after those names.
 func resolveExistingPath(arg string) (path string, isPath bool, err error) {
 	resolved := arg
 	if r, everr := filepath.EvalSymlinks(arg); everr == nil {
@@ -275,8 +400,8 @@ func resolveExistingPath(arg string) (path string, isPath bool, err error) {
 		return resolved, true, nil
 	}
 
-	if ver, verr := theme.FindLatestLocalVersion(resolved); verr == nil {
-		return filepath.Join(resolved, ver+".toml"), true, nil
+	if best, berr := highestVersionedTomlInDir(resolved); berr == nil && best != "" {
+		return best, true, nil
 	}
 	starship := filepath.Join(resolved, "starship.toml")
 	if _, serr := os.Stat(starship); serr == nil {
@@ -300,11 +425,23 @@ func sourceFromPath(path string) (*publishSource, error) {
 		src.version = stem
 	}
 
+	// Resolve symlinks on BOTH sides before comparing: StellarHome itself
+	// can be a dotfiles symlink, but so can any ancestor of abs (macOS's
+	// /tmp -> /private/tmp, a bind-mounted or symlinked $HOME, ...).
+	// Comparing one resolved path against one unresolved path would
+	// otherwise never match, silently losing the author/name this theme
+	// lives under - and with it, the "someone else's theme - use fork"
+	// refusal below in runPublish, which keys off src.author being set.
+	resolvedAbs := abs
+	if r, everr := filepath.EvalSymlinks(abs); everr == nil {
+		resolvedAbs = r
+	}
+
 	if home, herr := paths.StellarHome(); herr == nil {
 		if resolvedHome, everr := filepath.EvalSymlinks(home); everr == nil {
 			home = resolvedHome
 		}
-		if rel, relErr := filepath.Rel(home, abs); relErr == nil && !strings.HasPrefix(rel, "..") && rel != "." {
+		if rel, relErr := filepath.Rel(home, resolvedAbs); relErr == nil && !strings.HasPrefix(rel, "..") && rel != "." {
 			parts := strings.Split(filepath.ToSlash(rel), "/")
 			if len(parts) >= 2 {
 				src.author, src.name = parts[0], parts[1]
@@ -374,8 +511,12 @@ func loadAndCheckConfig(path string) (string, theme.ValidationResult, error) {
 		return "", theme.ValidationResult{}, fmt.Errorf("invalid config: %w", result.Error)
 	}
 
-	if n := utf16Length(content); n == 0 || n > maxConfigUTF16Units {
-		return "", theme.ValidationResult{}, fmt.Errorf("config must be 1-%d UTF-16 code units (got %d)", maxConfigUTF16Units, n)
+	n := utf16Length(content)
+	switch {
+	case n == 0:
+		return "", theme.ValidationResult{}, fmt.Errorf("config is empty")
+	case n > maxConfigUTF16Units:
+		return "", theme.ValidationResult{}, fmt.Errorf("config is too long: %d characters (max %d)", n, maxConfigUTF16Units)
 	}
 
 	return content, result, nil
@@ -393,20 +534,43 @@ func loadScreenshot(path string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("couldn't read screenshot: %w", err)
 	}
+	base := filepath.Base(path)
 	if api.DetectImageContentType(data) == "" {
-		return nil, fmt.Errorf("%s doesn't look like a PNG, JPEG or WebP image", path)
+		return nil, fmt.Errorf("%s doesn't look like a PNG, JPEG or WebP image", base)
 	}
 	if len(data) > api.MaxScreenshotBytes {
-		return nil, fmt.Errorf("%s is too large (max %d bytes)", path, api.MaxScreenshotBytes)
+		return nil, fmt.Errorf("%s is %s - screenshots can be at most %s", base, api.FormatMB(len(data)), api.FormatMB(api.MaxScreenshotBytes))
 	}
 	return data, nil
+}
+
+// normalizeUserPath cleans up a path typed - or drag-and-dropped - at a
+// prompt: surrounding whitespace, a pair of matching quotes a terminal's
+// drag-and-drop often adds around the path, and a leading "~/" (no shell is
+// expanding it here, since this never goes through one).
+func normalizeUserPath(raw string) string {
+	s := strings.TrimSpace(raw)
+	if len(s) >= 2 {
+		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
+			s = s[1 : len(s)-1]
+		}
+	}
+	if strings.HasPrefix(s, "~/") {
+		if home, herr := os.UserHomeDir(); herr == nil {
+			s = filepath.Join(home, s[2:])
+		}
+	}
+	return s
 }
 
 // --- identity ----------------------------------------------------------------
 
 // publishWhoami resolves the logged-in user, offering an inline login when
 // stdin is a terminal and nothing (valid) is stored - rather than making the
-// user run `stellar auth` themselves and retype the publish command.
+// user run `stellar auth` themselves and retype the publish command. --yes
+// is treated the same as "no TTY": there is no sensible default for "should
+// I interactively log you in", and a device login needs a human in a
+// browser anyway, which --yes explicitly asked to avoid.
 func publishWhoami(cmd *cobra.Command, r *bufio.Reader) (*api.WhoamiResponse, string, error) {
 	baseURL := authBaseURL()
 	token, err := auth.Token(baseURL)
@@ -425,11 +589,12 @@ func publishWhoami(cmd *cobra.Command, r *bufio.Reader) (*api.WhoamiResponse, st
 		// Falls through: the stored token was revoked/invalid.
 	}
 
-	if !isTerminal(cmd.InOrStdin()) {
+	tty := isTerminal(cmd.InOrStdin())
+	if !tty || publishYes {
 		return nil, "", notLoggedInError()
 	}
 
-	ok, perr := promptYesNo(r, "You're not logged in to stellar-hub. Log in now?", true, true, "stellar auth")
+	ok, perr := promptYesNo(r, tty, "You're not logged in to stellar-hub. Log in now?", true, "stellar auth")
 	if perr != nil {
 		return nil, "", perr
 	}
@@ -475,10 +640,14 @@ func normalizeSlug(raw string) string {
 
 // resolvePublishSlug picks the slug to publish under: --slug wins outright;
 // otherwise a theme already identified by its stellar-cache location keeps
-// its directory name (normalized); a loose starship.toml (no stellar-managed
-// directory to name it after) is asked for explicitly instead of guessing
-// from whatever directory it happens to sit in.
-func resolvePublishSlug(r *bufio.Reader, tty bool, src *publishSource) (string, error) {
+// its directory name (normalized); a versioned "<X.Y>.toml" outside the
+// cache also uses its containing folder's name (the same "theme folder"
+// convention); a loose, arbitrary "whatever.toml" uses the file's own name
+// instead of whichever folder it happens to sit in (publishing
+// ~/Downloads/catppuccin.toml must not become slug "downloads"); only a
+// bare "starship.toml" - which carries no name of its own - is asked for
+// explicitly.
+func resolvePublishSlug(r *bufio.Reader, interactive bool, src *publishSource) (string, error) {
 	if publishSlug != "" {
 		return normalizeSlug(publishSlug), nil
 	}
@@ -486,8 +655,12 @@ func resolvePublishSlug(r *bufio.Reader, tty bool, src *publishSource) (string, 
 		return normalizeSlug(src.name), nil
 	}
 
-	if filepath.Base(src.path) == "starship.toml" {
-		if !tty {
+	base := filepath.Base(src.path)
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
+
+	switch {
+	case base == "starship.toml":
+		if !interactive {
 			return "", noAnswerError("--slug <slug>")
 		}
 		dirGuess := normalizeSlug(filepath.Base(filepath.Dir(src.path)))
@@ -496,13 +669,23 @@ func resolvePublishSlug(r *bufio.Reader, tty bool, src *publishSource) (string, 
 			return "", err
 		}
 		return normalizeSlug(answer), nil
-	}
 
-	candidate := normalizeSlug(filepath.Base(filepath.Dir(src.path)))
-	if candidate == "" {
-		return "", fmt.Errorf("couldn't derive a slug from %s; pass --slug", src.path)
+	case versionFilenameRe.MatchString(stem):
+		// A versioned config outside the stellar cache - keep the
+		// "theme folder" convention: its own name is just a version number.
+		candidate := normalizeSlug(filepath.Base(filepath.Dir(src.path)))
+		if candidate == "" {
+			return "", fmt.Errorf("couldn't derive a slug from %s; pass --slug", src.path)
+		}
+		return candidate, nil
+
+	default:
+		candidate := normalizeSlug(stem)
+		if candidate == "" {
+			return "", fmt.Errorf("couldn't derive a slug from %s; pass --slug", src.path)
+		}
+		return candidate, nil
 	}
-	return candidate, nil
 }
 
 // publishSourceField builds the contract's "source" field: "author/name@ver"
@@ -558,19 +741,25 @@ func titleCase(slug string) string {
 
 // --- draft resolution --------------------------------------------------------
 
-func applyExplicitFlagsCreate(req *api.CreateDraftRequest) {
-	if publishDescription != "" {
-		v := publishDescription
-		req.Description = &v
-	}
-	if publishGroup != "" {
-		v := publishGroup
-		req.Group = &v
-	}
-	if publishColorMode != "" {
-		v := publishColorMode
-		req.ColorMode = &v
-	}
+// anyThemeOnlyFlagsGiven reports whether the user passed any flag that only
+// makes sense for a theme (as opposed to a version draft of an existing
+// theme) - used to warn, once, when one of these is about to be silently
+// ignored on a version draft.
+func anyThemeOnlyFlagsGiven() bool {
+	return publishName != "" || publishDescription != "" || publishGroup != "" || publishColorMode != ""
+}
+
+// warnThemeOnlyFlagsIgnored tells the user exactly which flags don't apply
+// to a version draft, and where to change that metadata instead.
+func warnThemeOnlyFlagsIgnored() {
+	base := paths.APIURL(api.BaseURL)
+	color.Yellow("--name, --description, --group and --color-mode only apply to new themes - change those in settings: %s/settings", base)
+}
+
+// applyExplicitFlagsCreateShared sets the fields that apply to a freshly
+// created draft of EITHER kind - a version draft has its own dependencies,
+// minStarshipVersion, version and notes just as much as a theme draft does.
+func applyExplicitFlagsCreateShared(req *api.CreateDraftRequest) {
 	if len(publishDeps) > 0 {
 		v := append([]string(nil), publishDeps...)
 		req.Dependencies = &v
@@ -585,7 +774,10 @@ func applyExplicitFlagsCreate(req *api.CreateDraftRequest) {
 	}
 }
 
-func applyExplicitFlagsPatch(req *api.PatchDraftRequest) {
+// applyExplicitFlagsCreateThemeOnly sets the fields that only make sense on
+// a brand-new theme draft - never call this for a version draft (see
+// anyThemeOnlyFlagsGiven/warnThemeOnlyFlagsIgnored instead).
+func applyExplicitFlagsCreateThemeOnly(req *api.CreateDraftRequest) {
 	if publishDescription != "" {
 		v := publishDescription
 		req.Description = &v
@@ -598,6 +790,11 @@ func applyExplicitFlagsPatch(req *api.PatchDraftRequest) {
 		v := publishColorMode
 		req.ColorMode = &v
 	}
+}
+
+// applyExplicitFlagsPatchShared is applyExplicitFlagsCreateShared for PATCH,
+// safe to send regardless of the draft's kind.
+func applyExplicitFlagsPatchShared(req *api.PatchDraftRequest) {
 	if len(publishDeps) > 0 {
 		v := append([]string(nil), publishDeps...)
 		req.Dependencies = &v
@@ -610,13 +807,32 @@ func applyExplicitFlagsPatch(req *api.PatchDraftRequest) {
 		v := publishNotes
 		req.VersionNotes = &v
 	}
-	if publishName != "" {
-		v := publishName
-		req.Name = &v
-	}
 	if publishVersion != "" {
 		v := normalizeVersionFlag(publishVersion)
 		req.Version = &v
+	}
+}
+
+// applyExplicitFlagsPatchThemeOnly is applyExplicitFlagsCreateThemeOnly for
+// PATCH - only ever called when attaching to a THEME draft. Slug lives here
+// too: the hub never accepts it on a version draft at all, and even on a
+// theme draft it's only ever sent when the user explicitly passed --slug.
+func applyExplicitFlagsPatchThemeOnly(req *api.PatchDraftRequest) {
+	if publishDescription != "" {
+		v := publishDescription
+		req.Description = &v
+	}
+	if publishGroup != "" {
+		v := publishGroup
+		req.Group = &v
+	}
+	if publishColorMode != "" {
+		v := publishColorMode
+		req.ColorMode = &v
+	}
+	if publishName != "" {
+		v := publishName
+		req.Name = &v
 	}
 	if publishSlug != "" {
 		v := normalizeSlug(publishSlug)
@@ -637,10 +853,14 @@ func findSlugMatchingDraft(drafts []api.Draft, slug string) *api.Draft {
 	return nil
 }
 
+// findWaitingDrafts returns the user's THEME drafts (only) that are still
+// waiting for a config - version drafts are deliberately excluded, so a
+// config meant for one theme can never end up attached to some other
+// theme's version draft just because both happened to be waiting.
 func findWaitingDrafts(drafts []api.Draft) []api.Draft {
 	var out []api.Draft
 	for _, d := range drafts {
-		if d.Status == api.DraftStatusWaitingForConfig {
+		if d.Kind == api.DraftKindTheme && d.Status == api.DraftStatusWaitingForConfig {
 			out = append(out, d)
 		}
 	}
@@ -681,45 +901,52 @@ func relativeOrDate(iso string) string {
 // that already matches the target slug, wording it according to where its
 // current config came from.
 func statusAwarePrompt(d *api.Draft) string {
+	code := term.SanitizeForTerminal(d.Code)
 	switch {
 	case d.ConfigSource == nil, *d.ConfigSource == api.ConfigSourceLatest:
-		return fmt.Sprintf("Draft %s is waiting for a config - attach yours?", d.Code)
+		return fmt.Sprintf("Draft %s is waiting for a config - attach yours?", code)
 	case *d.ConfigSource == api.ConfigSourceWeb:
 		return fmt.Sprintf("Replace the config you set on the web (%s) with this one?", relativeOrDate(derefOr(d.ConfigUpdatedAt, d.UpdatedAt)))
 	case *d.ConfigSource == api.ConfigSourceCLI:
 		return fmt.Sprintf("Replace the config you pushed from the CLI (%s) with this one?", relativeOrDate(derefOr(d.ConfigUpdatedAt, d.UpdatedAt)))
 	default:
-		return fmt.Sprintf("Attach your config to draft %s?", d.Code)
+		return fmt.Sprintf("Attach your config to draft %s?", code)
 	}
 }
 
-// confirmAttachToDraft asks before replacing an existing draft's config. Like
-// promptConfirmation elsewhere in this package, it always attempts the
-// prompt regardless of whether stdin looks like a terminal - a piped real
-// answer (`echo y | stellar publish ...`) still works; only a genuinely
-// missing answer (noAnswerError, from promptYesNo) turns into an error
-// naming --yes.
-func confirmAttachToDraft(r *bufio.Reader, d *api.Draft) (bool, error) {
+// isWaitingForConfig reports whether d's current config would be replaced
+// (something actually changes) or whether it's genuinely still waiting
+// (nothing gets replaced) - used to pick confirmAttachToDraft's default.
+func isWaitingForConfig(d *api.Draft) bool {
+	return d.ConfigSource == nil || *d.ConfigSource == api.ConfigSourceLatest
+}
+
+// confirmAttachToDraft asks before replacing an existing draft's config.
+// Like promptConfirmation elsewhere in this package, it always attempts the
+// prompt - a piped real answer still works; only a genuinely missing answer
+// (noAnswerError, from promptYesNo) turns into an error naming --yes.
+//
+// The default is Yes when the draft is only waiting for a config (nothing
+// gets replaced by attaching), and No when it would actually overwrite a
+// config someone already set, on the web or from the CLI.
+func confirmAttachToDraft(r *bufio.Reader, tty bool, d *api.Draft) (bool, error) {
 	if publishYes {
 		return true, nil
 	}
-	return promptYesNo(r, statusAwarePrompt(d), false, false, "--yes")
+	return promptYesNo(r, tty, statusAwarePrompt(d), isWaitingForConfig(d), "--yes")
 }
 
 func waitingDraftLabel(d api.Draft) string {
-	switch {
-	case d.Kind == api.DraftKindTheme && d.Name != nil && *d.Name != "":
-		return fmt.Sprintf("%s - theme draft %q", d.Code, term.SanitizeForTerminal(*d.Name))
-	case d.Kind == api.DraftKindVersion && d.Theme != nil:
-		return fmt.Sprintf("%s - new version of %s", d.Code, term.SanitizeForTerminal(d.Theme.Name))
-	default:
-		return d.Code
+	name := "(untitled)"
+	if d.Name != nil && *d.Name != "" {
+		name = term.SanitizeForTerminal(*d.Name)
 	}
+	return fmt.Sprintf("%s - theme draft %q", term.SanitizeForTerminal(d.Code), name)
 }
 
 // promptWaitingDraftChoice offers to attach to one of the user's other
-// drafts that are still waiting for a config, defaulting to "create a new
-// draft" - used only when nothing already matches the target slug.
+// theme drafts that are still waiting for a config, defaulting to "create a
+// new draft" - used only when nothing already matches the target slug.
 func promptWaitingDraftChoice(r *bufio.Reader, waiting []api.Draft) (chosen *api.Draft, createNew bool, err error) {
 	labels := make([]string, 0, len(waiting)+1)
 	for _, d := range waiting {
@@ -747,19 +974,19 @@ func promptWaitingDraftChoice(r *bufio.Reader, waiting []api.Draft) (chosen *api
 // draft blocking the next attempt) from one we merely attached to via PATCH
 // (declining leaves it exactly as it now is - its config was already
 // updated, so there is nothing left to roll back).
-func checkUnchanged(r *bufio.Reader, client *api.Client, d *api.Draft, created bool) (*api.Draft, error) {
+func checkUnchanged(r *bufio.Reader, tty bool, client *api.Client, d *api.Draft, created bool) (*api.Draft, error) {
 	if d.Kind != api.DraftKindVersion || !d.UnchangedFromLatest {
 		return d, nil
 	}
 	latest := "the latest version"
 	if d.Theme != nil && d.Theme.LatestVersion != "" {
-		latest = d.Theme.LatestVersion
+		latest = term.SanitizeForTerminal(d.Theme.LatestVersion)
 	}
 	if publishYes {
 		return d, nil
 	}
 
-	ok, err := promptYesNo(r, fmt.Sprintf("Nothing changed vs %s - keep this draft anyway?", latest), false, false, "--yes")
+	ok, err := promptYesNo(r, tty, fmt.Sprintf("Nothing changed vs %s - keep this draft anyway?", latest), false, "--yes")
 	if err != nil {
 		if created {
 			_ = client.DeleteDraft(d.Code)
@@ -767,11 +994,12 @@ func checkUnchanged(r *bufio.Reader, client *api.Client, d *api.Draft, created b
 		return nil, err
 	}
 	if !ok {
+		code := term.SanitizeForTerminal(d.Code)
 		if created {
 			_ = client.DeleteDraft(d.Code)
-			return nil, fmt.Errorf("aborted: config unchanged vs %s (draft %s was not kept)", latest, d.Code)
+			return nil, fmt.Errorf("aborted: config unchanged vs %s (draft %s was not kept)", latest, code)
 		}
-		return nil, fmt.Errorf("aborted: config unchanged vs %s (draft %s was left as it was - its config had already been updated)", latest, d.Code)
+		return nil, fmt.Errorf("aborted: config unchanged vs %s (draft %s was left as it was - its config had already been updated)", latest, code)
 	}
 	return d, nil
 }
@@ -782,12 +1010,20 @@ func checkUnchanged(r *bufio.Reader, client *api.Client, d *api.Draft, created b
 // theme under the user's own name means a new version draft, and anything
 // else means a brand new theme draft - offering to reuse a draft still
 // waiting for a config first, unless one was already found by slug.
-func resolveOrCreateDraft(r *bufio.Reader, tty bool, client *api.Client, me *api.WhoamiResponse, slug string, src *publishSource, content string) (*api.Draft, error) {
+func resolveOrCreateDraft(r *bufio.Reader, interactive bool, client *api.Client, me *api.WhoamiResponse, slug string, src *publishSource, content string) (*api.Draft, error) {
 	source := publishSourceField(src)
 
-	attach := func(code string) (*api.Draft, error) {
+	// attach PATCHes an existing draft of the given kind - which must
+	// already be known, since a version draft never accepts the theme-only
+	// fields (name/slug/description/group/colorMode) a theme draft does.
+	attach := func(code, kind string) (*api.Draft, error) {
 		req := api.PatchDraftRequest{Config: &content, Source: &source}
-		applyExplicitFlagsPatch(&req)
+		applyExplicitFlagsPatchShared(&req)
+		if kind == api.DraftKindTheme {
+			applyExplicitFlagsPatchThemeOnly(&req)
+		} else if anyThemeOnlyFlagsGiven() {
+			warnThemeOnlyFlagsIgnored()
+		}
 		d, err := client.PatchDraft(code, req)
 		if err != nil {
 			return nil, wrapHubAPIError(err)
@@ -796,11 +1032,16 @@ func resolveOrCreateDraft(r *bufio.Reader, tty bool, client *api.Client, me *api
 	}
 
 	if publishDraftCode != "" {
-		d, err := attach(publishDraftCode)
+		code := strings.ToUpper(publishDraftCode)
+		existing, gerr := client.GetDraft(code, false)
+		if gerr != nil {
+			return nil, wrapHubAPIError(gerr)
+		}
+		d, err := attach(code, existing.Kind)
 		if err != nil {
 			return nil, err
 		}
-		return checkUnchanged(r, client, d, false)
+		return checkUnchanged(r, interactive, client, d, false)
 	}
 
 	drafts, err := client.ListDrafts()
@@ -809,45 +1050,48 @@ func resolveOrCreateDraft(r *bufio.Reader, tty bool, client *api.Client, me *api
 	}
 
 	if match := findSlugMatchingDraft(drafts, slug); match != nil {
-		ok, cerr := confirmAttachToDraft(r, match)
+		ok, cerr := confirmAttachToDraft(r, interactive, match)
 		if cerr != nil {
 			return nil, cerr
 		}
 		if !ok {
-			return nil, fmt.Errorf("aborted: draft %s was not changed", match.Code)
+			return nil, fmt.Errorf("aborted: draft %s was not changed", term.SanitizeForTerminal(match.Code))
 		}
-		d, err := attach(match.Code)
+		d, err := attach(match.Code, match.Kind)
 		if err != nil {
 			return nil, err
 		}
-		return checkUnchanged(r, client, d, false)
+		return checkUnchanged(r, interactive, client, d, false)
 	}
 
-	existing, infoErr := api.NewClient().GetThemeInfo(me.Username, slug)
+	existingTheme, infoErr := api.NewClient().GetThemeInfo(me.Username, slug)
 	themeExists := infoErr == nil
 	if infoErr != nil && !errors.Is(infoErr, api.ErrNotFound) {
 		return nil, fmt.Errorf("couldn't check stellar-hub for %s/%s: %w", me.Username, slug, infoErr)
 	}
 
-	if waiting := findWaitingDrafts(drafts); len(waiting) > 0 && tty && !publishYes {
+	if waiting := findWaitingDrafts(drafts); len(waiting) > 0 && interactive {
 		chosen, createNew, perr := promptWaitingDraftChoice(r, waiting)
 		if perr != nil {
 			return nil, perr
 		}
 		if !createNew {
-			d, err := attach(chosen.Code)
+			d, err := attach(chosen.Code, chosen.Kind)
 			if err != nil {
 				return nil, err
 			}
-			return checkUnchanged(r, client, d, false)
+			return checkUnchanged(r, interactive, client, d, false)
 		}
 	}
 
 	if themeExists {
 		req := api.CreateDraftRequest{Kind: api.DraftKindVersion, ThemeSlug: &slug, Config: &content, Source: &source}
-		applyExplicitFlagsCreate(&req)
+		applyExplicitFlagsCreateShared(&req)
+		if anyThemeOnlyFlagsGiven() {
+			warnThemeOnlyFlagsIgnored()
+		}
 
-		latest := maxThemeVersion(existing.Versions)
+		latest := maxThemeVersion(existingTheme.Versions)
 		switch {
 		case publishVersion != "":
 			v := normalizeVersionFlag(publishVersion)
@@ -861,11 +1105,12 @@ func resolveOrCreateDraft(r *bufio.Reader, tty bool, client *api.Client, me *api
 		if cerr != nil {
 			return nil, wrapHubAPIError(cerr)
 		}
-		return checkUnchanged(r, client, d, true)
+		return checkUnchanged(r, interactive, client, d, true)
 	}
 
 	req := api.CreateDraftRequest{Kind: api.DraftKindTheme, Slug: &slug, Config: &content, Source: &source}
-	applyExplicitFlagsCreate(&req)
+	applyExplicitFlagsCreateShared(&req)
+	applyExplicitFlagsCreateThemeOnly(&req)
 
 	version := publishVersion
 	if version == "" {
@@ -879,11 +1124,13 @@ func resolveOrCreateDraft(r *bufio.Reader, tty bool, client *api.Client, me *api
 
 	name := publishName
 	if name == "" {
-		// Only asked on a terminal. Piped stdin is reserved for the y/N
-		// confirmations (`echo y | stellar publish …`), and reading a name from
-		// it would swallow that answer as the theme's name.
+		// Only asked when interactive. Piped stdin is reserved for the y/N
+		// confirmations (`echo y | stellar publish …`), and reading a name
+		// from it would swallow that answer as the theme's name; --yes must
+		// never prompt at all, so it falls straight to the title-cased
+		// default too.
 		name = titleCase(slug)
-		if tty {
+		if interactive {
 			name, err = promptText(r, "Theme name", name, "--name <name>")
 			if err != nil {
 				return nil, err
@@ -902,68 +1149,76 @@ func resolveOrCreateDraft(r *bufio.Reader, tty bool, client *api.Client, me *api
 // --- output and --publish finalization ---------------------------------------
 
 // draftSavedHint appends a "the draft is still there" hint to err whenever
-// --publish fails after the draft itself already exists (filling in a
-// missing field, or the final publish call) - the draft isn't lost just
-// because finishing it in one command didn't work, so the user still needs
-// the link back to it. The hint deliberately uses a plain URL (no OSC 8/
-// color escapes) rather than term.Hyperlink: it's nested inside the
-// hint-rendering machinery's own coloring, and most modern terminals
-// linkify a bare URL on their own anyway (see internal/term/hyperlink.go).
+// a draft-related operation fails after the draft itself already exists
+// (a screenshot upload, filling in a missing field, or the final publish
+// call) - the draft isn't lost just because finishing it in one command
+// didn't work, so the user still needs the link back to it. The hint
+// deliberately uses a plain URL (no OSC 8/color escapes) rather than
+// term.Hyperlink: it's nested inside the hint-rendering machinery's own
+// coloring, and most modern terminals linkify a bare URL on their own
+// anyway (see internal/term/hyperlink.go).
 func draftSavedHint(err error, d *api.Draft) error {
 	if err == nil || d == nil {
 		return err
 	}
+	code := term.SanitizeForTerminal(d.Code)
 	return newHintedError(err.Error(), hint{
 		label:  "Draft saved",
-		values: []string{fmt.Sprintf("%s - finish it on the hub: %s", d.Code, d.URL)},
+		values: []string{fmt.Sprintf("%s - finish it on the hub: %s", code, d.URL)},
 	})
 }
 
-func printDraftSummary(d *api.Draft) {
-	name := d.Code
-	switch {
-	case d.Name != nil && *d.Name != "":
+// printDraftSummary prints the "✓ Draft ..." line. author is the logged-in
+// username (never trust a theme-draft's own author field for this, since
+// one isn't part of the Draft shape at all - the slug alone doesn't say
+// whose it is).
+func printDraftSummary(d *api.Draft, author string) {
+	code := term.SanitizeForTerminal(d.Code)
+	author = term.SanitizeForTerminal(author)
+
+	if d.Kind == api.DraftKindVersion {
+		slug := ""
+		if d.Theme != nil {
+			slug = term.SanitizeForTerminal(d.Theme.Slug)
+		}
+		target := fmt.Sprintf("%s/%s", author, slug)
+		if d.Version != nil && *d.Version != "" {
+			color.Green("✓ Draft %s: new version %s@%s", code, target, term.SanitizeForTerminal(*d.Version))
+		} else {
+			// Never print the latest EXISTING version as though it were the
+			// new one - with no version chosen yet, there simply isn't one.
+			color.Green("✓ Draft %s: new version of %s", code, target)
+		}
+		fmt.Printf("Finish it on the hub: %s%s\n", term.Hyperlink(d.URL, d.URL), color.HiBlackString(term.ClickHint()))
+		return
+	}
+
+	name := code
+	if d.Name != nil && *d.Name != "" {
 		name = term.SanitizeForTerminal(*d.Name)
-	case d.Theme != nil:
-		name = term.SanitizeForTerminal(d.Theme.Name)
 	}
-
-	version := "1.0"
-	if d.Version != nil && *d.Version != "" {
-		version = *d.Version
-	} else if d.Theme != nil && d.Theme.LatestVersion != "" {
-		version = d.Theme.LatestVersion
-	}
-
-	target := ""
-	switch {
-	case d.Slug != nil:
-		target = *d.Slug
-	case d.Theme != nil:
-		target = d.Theme.Slug
-	}
-
-	switch {
-	case d.Kind == api.DraftKindVersion && target != "":
-		color.Green("✓ Draft %s: new version %s of %s", d.Code, version, name)
-	case target != "":
-		color.Green("✓ Draft %s: %s (%s %s)", d.Code, name, target, version)
-	default:
-		color.Green("✓ Draft %s: %s", d.Code, name)
+	if d.Slug != nil && *d.Slug != "" {
+		version := "1.0"
+		if d.Version != nil && *d.Version != "" {
+			version = term.SanitizeForTerminal(*d.Version)
+		}
+		color.Green("✓ Draft %s: %s (%s/%s@%s)", code, name, author, term.SanitizeForTerminal(*d.Slug), version)
+	} else {
+		color.Green("✓ Draft %s: %s", code, name)
 	}
 	fmt.Printf("Finish it on the hub: %s%s\n", term.Hyperlink(d.URL, d.URL), color.HiBlackString(term.ClickHint()))
 }
 
 // fillMissingForPublish fills in whatever the draft is still missing before
 // --publish can finalize it: an explicit flag is used if given, otherwise an
-// interactive prompt (TTY only) - a non-interactive run without the right
-// flag errors out naming it instead of guessing.
+// interactive prompt - a non-interactive run (no TTY, or --yes) without the
+// right flag errors out naming it instead of guessing.
 //
 // On every error path this still returns the most recent *api.Draft it has
 // (never nil) alongside the error, so the caller can always point the user
 // back at the draft - which still exists on the hub regardless of why
 // filling it in failed - instead of leaving them with nothing but an error.
-func fillMissingForPublish(r *bufio.Reader, tty bool, client *api.Client, d *api.Draft) (*api.Draft, error) {
+func fillMissingForPublish(r *bufio.Reader, interactive bool, client *api.Client, d *api.Draft) (*api.Draft, error) {
 	if len(d.Missing) == 0 {
 		return d, nil
 	}
@@ -980,8 +1235,8 @@ func fillMissingForPublish(r *bufio.Reader, tty bool, client *api.Client, d *api
 				changed = true
 				continue
 			}
-			if !tty {
-				return d, fmt.Errorf("draft %s is missing a name; re-run with --name <name>", d.Code)
+			if !interactive {
+				return d, fmt.Errorf("draft %s is missing a name; re-run with --name <name>", term.SanitizeForTerminal(d.Code))
 			}
 			def := ""
 			if d.Slug != nil {
@@ -995,18 +1250,19 @@ func fillMissingForPublish(r *bufio.Reader, tty bool, client *api.Client, d *api
 			changed = true
 
 		case "screenshot":
-			if !tty {
-				return d, fmt.Errorf("draft %s is missing a screenshot; re-run with --screenshot <path>", d.Code)
+			if !interactive {
+				return d, fmt.Errorf("draft %s is missing a screenshot; re-run with --screenshot <path>", term.SanitizeForTerminal(d.Code))
 			}
-			path, err := promptText(r, "Path to a screenshot (PNG/JPEG/WebP, max 4MB)", "", "--screenshot <path>")
+			rawPath, err := promptText(r, "Path to a screenshot (PNG/JPEG/WebP, max 4MB)", "", "--screenshot <path>")
 			if err != nil {
 				return d, err
 			}
+			path := normalizeUserPath(rawPath)
 			data, lerr := loadScreenshot(path)
 			if lerr != nil {
 				return d, lerr
 			}
-			updated, uerr := client.UploadScreenshot(d.Code, data)
+			updated, uerr := client.UploadScreenshot(d.Code, filepath.Base(path), data)
 			if uerr != nil {
 				return d, wrapHubAPIError(uerr)
 			}
@@ -1019,8 +1275,8 @@ func fillMissingForPublish(r *bufio.Reader, tty bool, client *api.Client, d *api
 				changed = true
 				continue
 			}
-			if !tty {
-				return d, fmt.Errorf("draft %s is missing a version; re-run with --version <version>", d.Code)
+			if !interactive {
+				return d, fmt.Errorf("draft %s is missing a version; re-run with --version <version>", term.SanitizeForTerminal(d.Code))
 			}
 			v, err := promptText(r, "Version", "", "--version <version>")
 			if err != nil {
@@ -1031,7 +1287,12 @@ func fillMissingForPublish(r *bufio.Reader, tty bool, client *api.Client, d *api
 			changed = true
 
 		default:
-			return d, fmt.Errorf("draft %s is missing %q, which stellar publish can't fill in - finish it on the hub", d.Code, field)
+			// Includes "config", which the hub can report as missing for a
+			// version draft whose config is null or whitespace-only - a
+			// publish run always sends a non-empty config, so this
+			// shouldn't normally happen, but if it does there's nothing
+			// sensible for the CLI to fill in on its own.
+			return d, fmt.Errorf("draft %s is missing %q, which stellar publish can't fill in - finish it on the hub", term.SanitizeForTerminal(d.Code), term.SanitizeForTerminal(field))
 		}
 	}
 
@@ -1044,7 +1305,11 @@ func fillMissingForPublish(r *bufio.Reader, tty bool, client *api.Client, d *api
 	}
 
 	if len(d.Missing) > 0 {
-		return d, fmt.Errorf("draft %s is still missing: %s", d.Code, strings.Join(d.Missing, ", "))
+		missing := make([]string, len(d.Missing))
+		for i, m := range d.Missing {
+			missing[i] = term.SanitizeForTerminal(m)
+		}
+		return d, fmt.Errorf("draft %s is still missing: %s", term.SanitizeForTerminal(d.Code), strings.Join(missing, ", "))
 	}
 	return d, nil
 }
