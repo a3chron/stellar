@@ -78,7 +78,7 @@ func cacheUsername(username string) {
 var authCmd = &cobra.Command{
 	Use:   "auth",
 	Short: "Log in to stellar-hub",
-	Long: `Log in to stellar-hub for stellar publish.
+	Long: `Log in to stellar-hub so you can publish themes from the terminal.
 
 Opens a browser to approve this device, then polls stellar-hub until you do.
 The credential is saved to credentials.json in your stellar home directory.`,

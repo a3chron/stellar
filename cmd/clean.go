@@ -104,6 +104,6 @@ remove the currently applied theme.`,
 func init() {
 	cleanCmd.Flags().BoolVar(&cleanAll, "all", false, "Also remove the currently applied theme")
 	cleanCmd.Flags().BoolVar(&cleanIncludeOwn, "include-own", false,
-		"Also remove your own themes (hand-made, or from new/fork) - never your config backups, which only \"stellar remove <username>/backup\" removes")
+		"Also remove your own themes (hand-made or from new/fork); never backups")
 	cleanCmd.Flags().BoolVarP(&cleanYes, "yes", "y", false, "Skip the confirmation before removing your own themes")
 }
