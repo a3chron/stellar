@@ -76,31 +76,20 @@ func promptConfirmation(prompt string) (bool, error) {
 	return false, nil
 }
 
-// confirmCustomCommands warns the user and asks for confirmation when a
-// theme's [custom] commands can execute arbitrary shell code, before the
-// theme is ever applied, previewed or rolled back to. It is the single
-// implementation of that gate, shared by apply, preview and rollback so none
-// of them can reach the same dangerous content without showing it - apply had
-// this warning, but preview and rollback's re-download path used to skip it
-// entirely, even though both also end up running starship against the
-// theme's config.
+// printCustomCommandWarning prints the SECURITY WARNING block for a theme
+// whose [custom] commands can execute arbitrary shell code - the review
+// link, and the "apply at your own risk" line - without asking anything
+// itself. Extracted out of confirmCustomCommands so `stellar fork` (which
+// gates on the shared prompt reader, not promptConfirmation's own
+// os.Stdin-backed one - see cmd/prompt.go) can show the exact same warning
+// before its own y/N prompt.
 //
-// localPath is the file that will actually be used, when there is one on
-// disk (preview, rollback to a cached theme); it is shown first, since a local
-// theme may not exist on the hub at all. Pass "" for content that was just
-// fetched from the hub, where the hub link is the natural place to review it.
-//
-// verb and verbPast name the action this confirmation guards ("apply"/
-// "applied", "preview"/"previewed", "restore"/"restored"), used only for the
-// prompt wording. It returns nil immediately when there are no custom
-// commands or force is true. Declining, or promptConfirmation failing fast on
-// a non-interactive stdin, is returned as an error so the caller aborts with
-// a non-zero exit instead of silently continuing (see promptConfirmation).
-func confirmCustomCommands(t *theme.Theme, validationResult theme.ValidationResult, force bool, localPath, verb, verbPast string) error {
-	if !validationResult.HasCustomCommands || force {
-		return nil
-	}
-
+// localPath is a file the content can already be reviewed at on disk (a
+// cached theme being previewed/rolled back to, say); pass "" for content
+// that has no local copy yet (freshly fetched from the hub, or - for
+// fork - the theme being copied FROM, which is reviewed on the hub either
+// way since forking never trusts a pre-existing local copy of the source).
+func printCustomCommandWarning(t *theme.Theme, localPath string) {
 	color.Red("\nSECURITY WARNING ")
 	color.Yellow("This theme contains [custom] commands that can execute arbitrary shell code.")
 	color.Yellow("Custom commands run on your system every time Starship renders your prompt.")
@@ -129,6 +118,34 @@ func confirmCustomCommands(t *theme.Theme, validationResult theme.ValidationResu
 		color.HiBlackString(term.ClickHint()),
 	)
 	fmt.Println()
+}
+
+// confirmCustomCommands warns the user and asks for confirmation when a
+// theme's [custom] commands can execute arbitrary shell code, before the
+// theme is ever applied, previewed or rolled back to. It is the single
+// implementation of that gate, shared by apply, preview and rollback so none
+// of them can reach the same dangerous content without showing it - apply had
+// this warning, but preview and rollback's re-download path used to skip it
+// entirely, even though both also end up running starship against the
+// theme's config.
+//
+// localPath is the file that will actually be used, when there is one on
+// disk (preview, rollback to a cached theme); it is shown first, since a local
+// theme may not exist on the hub at all. Pass "" for content that was just
+// fetched from the hub, where the hub link is the natural place to review it.
+//
+// verb and verbPast name the action this confirmation guards ("apply"/
+// "applied", "preview"/"previewed", "restore"/"restored"), used only for the
+// prompt wording. It returns nil immediately when there are no custom
+// commands or force is true. Declining, or promptConfirmation failing fast on
+// a non-interactive stdin, is returned as an error so the caller aborts with
+// a non-zero exit instead of silently continuing (see promptConfirmation).
+func confirmCustomCommands(t *theme.Theme, validationResult theme.ValidationResult, force bool, localPath, verb, verbPast string) error {
+	if !validationResult.HasCustomCommands || force {
+		return nil
+	}
+
+	printCustomCommandWarning(t, localPath)
 
 	ok, err := promptConfirmation(fmt.Sprintf("Do you trust this theme and want to %s it?", verb))
 	if err != nil {

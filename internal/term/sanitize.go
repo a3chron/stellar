@@ -26,3 +26,27 @@ func SanitizeForTerminal(s string) string {
 	}
 	return b.String()
 }
+
+// SanitizeMultiline is SanitizeForTerminal for hub-provided text that is
+// allowed to span several lines on purpose - a theme description or version
+// notes, say, which keep their author's line breaks. It still strips every
+// other C0/C1 control character and DEL (escape sequences, a stray
+// carriage return that could overwrite part of a previous line, ...); only
+// '\n' and '\t' are let through verbatim.
+func SanitizeMultiline(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == '\t' || r == ' ' || r == '\n':
+			b.WriteRune(r)
+		case r < 0x20 || r == 0x7f:
+			// C0 controls (including \r) and DEL - drop.
+		case r >= 0x80 && r <= 0x9f:
+			// C1 controls - drop.
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}

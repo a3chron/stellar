@@ -91,6 +91,11 @@ var rollbackCmd = &cobra.Command{
 				return fmt.Errorf("failed to save theme: %w", err)
 			}
 			redownloaded = true
+
+			// Same bookkeeping apply.go does on a fresh download: record it
+			// as downloaded, so `stellar clean` recognizes it as a plain,
+			// re-fetchable download rather than an untracked/"own" theme.
+			cfg.MarkDownloaded(fmt.Sprintf("%s/%s", t.Author, t.Name))
 		}
 
 		// Even when the file was already cached, validate it - invalid TOML

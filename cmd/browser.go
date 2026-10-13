@@ -6,10 +6,16 @@
 package cmd
 
 import (
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"testing"
+
+	"github.com/a3chron/stellar/internal/api"
+	"github.com/a3chron/stellar/internal/paths"
 )
 
 // openBrowser is a package var - like preview.go's startTerminal - purely so
@@ -17,11 +23,56 @@ import (
 // host environment, and so a test can override it to record what URL would
 // have been opened. testing.Testing() is a property of the process, not of
 // any environment variable a test might forget to unset.
-var openBrowser = func(url string) {
-	if testing.Testing() {
+var openBrowser = func(rawURL string) {
+	if testing.Testing() || !isSafeBrowserURL(rawURL) {
 		return
 	}
-	_ = launchBrowser(url)
+	_ = launchBrowser(rawURL)
+}
+
+// isSafeBrowserURL reports whether rawURL is safe to hand to the OS's "open
+// this URL" mechanism: every URL stellar ever opens should point at the
+// configured hub, but this is still the one place stellar passes a string
+// *the hub itself returned* (verificationUrlComplete) to a shell-adjacent
+// command (open/xdg-open/rundll32), so it's validated the same way a
+// browser's own URL bar would refuse to silently "upgrade" scheme or host:
+// https to any host, or plain http only to a loopback address, and in both
+// cases only to the exact host stellar is actually configured to talk to
+// (paths.APIURL(api.BaseURL)) - never some other host the response might
+// have been tampered with (or simply misconfigured) to point at. Anything
+// else opens nothing; the link is always printed too, so the user can still
+// open or copy it themselves.
+func isSafeBrowserURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	expected, err := url.Parse(paths.APIURL(api.BaseURL))
+	if err != nil {
+		return false
+	}
+	if !strings.EqualFold(u.Host, expected.Host) {
+		return false
+	}
+
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return true
+	case "http":
+		return isLoopbackHostname(u.Hostname())
+	default:
+		return false
+	}
+}
+
+// isLoopbackHostname reports whether host (already stripped of any port, as
+// url.URL.Hostname() does) refers to the local machine.
+func isLoopbackHostname(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // launchBrowser best-effort opens url in the user's default browser.

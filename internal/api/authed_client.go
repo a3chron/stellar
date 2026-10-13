@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/a3chron/stellar/internal/paths"
+	"github.com/a3chron/stellar/internal/term"
 )
 
 // ErrUnauthorized is returned by any bearer-authenticated call when the hub
@@ -121,7 +122,17 @@ func (t *authedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // http outright on every hop it would otherwise take. token may be "" for
 // start/token (the two auth endpoints that take no bearer token at all).
 func NewAuthedClient(token string) *Client {
-	c := newClient(paths.APIURL(BaseURL), 30*time.Second)
+	return NewAuthedClientWithURL(paths.APIURL(BaseURL), token)
+}
+
+// NewAuthedClientWithURL is NewAuthedClient for a specific base URL, rather
+// than paths.APIURL(BaseURL) (the current STELLAR_API_URL/production
+// default). Used where a caller must talk to a hub that isn't necessarily
+// "the" current one - e.g. `stellar uninstall` revoking every stored
+// credentials.json entry against ITS OWN base URL, not just whichever one
+// STELLAR_API_URL happens to point at right now.
+func NewAuthedClientWithURL(baseURL, token string) *Client {
+	c := newClient(baseURL, 30*time.Second)
 	c.token = token
 	c.httpClient.Transport = &authedTransport{base: http.DefaultTransport, token: token}
 	c.httpClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
@@ -160,7 +171,7 @@ func (c *Client) classifyNewEndpointError(resp *http.Response) error {
 	jsonErr := json.Unmarshal(body, &payload)
 
 	if jsonErr == nil && payload.Code != "" {
-		return &APIError{Status: resp.StatusCode, Code: payload.Code, Message: payload.Error, Missing: payload.Missing, Details: payload.Details}
+		return &APIError{Status: resp.StatusCode, Code: payload.Code, Message: term.SanitizeForTerminal(payload.Error), Missing: payload.Missing, Details: payload.Details}
 	}
 
 	isLegacyStatus := resp.StatusCode == http.StatusUnauthorized ||
@@ -179,7 +190,7 @@ func (c *Client) classifyNewEndpointError(resp *http.Response) error {
 		if isLegacyStatus {
 			return &hubTooOldError{baseURL: c.baseURL}
 		}
-		return &APIError{Status: resp.StatusCode, Message: payload.Error}
+		return &APIError{Status: resp.StatusCode, Message: term.SanitizeForTerminal(payload.Error)}
 	}
 
 	// Not JSON at all: a 404/405 means the route doesn't exist (hubTooOld);

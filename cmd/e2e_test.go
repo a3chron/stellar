@@ -2052,6 +2052,7 @@ func resetFlags() {
 	cleanAll = false
 	cleanIncludeOwn = false
 	cleanYes = false
+	forkForce = false
 	uninstallYes = false
 	uninstallKeepConfig = false
 	rollbackForce = false
@@ -3827,4 +3828,47 @@ func TestE2E_RemoveCacheOnlySuggestions(t *testing.T) {
 			"alice/raimbow isn't in your local cache\nDid you mean: alice/rainbow",
 			err.Error())
 	})
+}
+
+// TestE2E_InfoSanitizesHubFields guards review item 2: every hub-provided
+// string `stellar info` prints (name, author, slug, description, version
+// notes, dependencies) must have terminal control characters stripped -
+// description and version notes keep their own newlines (SanitizeMultiline),
+// everything else is a single line.
+func TestE2E_InfoSanitizesHubFields(t *testing.T) {
+	env := testutil.SetupTestEnv(t)
+	resetFlags()
+
+	mockAPI := testutil.NewMockAPIHandler()
+	mockAPI.AddTheme(testutil.MockTheme{
+		ID:          "evil-id",
+		Author:      "testuser",
+		Slug:        "evil-theme",
+		Name:        "Evil\x1b[31mTheme",
+		Description: "line one\nline two",
+		Downloads:   1,
+		Versions: []testutil.MockVersion{
+			{
+				Version:      "1.0",
+				VersionNotes: "notes\x1b[0mhere\nsecond line",
+				Dependencies: []string{"dep\x1bone"},
+			},
+		},
+	})
+	env.SetupMockAPI(mockAPI)
+
+	out := testutil.CaptureOutput(t, func() {
+		cmd := NewRootCmd()
+		cmd.SetArgs([]string{"info", "testuser/evil-theme"})
+		cmd.SetOut(new(bytes.Buffer))
+		require.NoError(t, cmd.Execute())
+	})
+
+	assert.NotContains(t, out, "\x1b[31m")
+	assert.NotContains(t, out, "\x1b[0m")
+	assert.NotContains(t, out, "dep\x1bone")
+	// The description's own newline must survive.
+	assert.Contains(t, out, "line one\nline two")
+	assert.Contains(t, out, "notes")
+	assert.Contains(t, out, "here\nsecond line")
 }

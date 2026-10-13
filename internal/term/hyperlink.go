@@ -3,6 +3,8 @@ package term
 
 import (
 	"fmt"
+	"net/url"
+	"strings"
 
 	"github.com/fatih/color"
 )
@@ -26,14 +28,34 @@ import (
 // linkify bare URLs on their own, so an OSC 8 link with no styling looks
 // exactly like ordinary text until you happen to hover it - the underline is
 // what tells the reader there is something to click at all.
-func Hyperlink(url, text string) string {
-	if color.NoColor {
+func Hyperlink(rawURL, text string) string {
+	if color.NoColor || !isSafeHyperlinkURL(rawURL) {
 		return text
 	}
 	return fmt.Sprintf(
 		"\x1b]8;;%s\x1b\\%s%s%s\x1b]8;;\x1b\\",
-		url, underlineOn, text, underlineOff,
+		rawURL, underlineOn, text, underlineOff,
 	)
+}
+
+// isSafeHyperlinkURL reports whether rawURL is safe to embed inside an OSC 8
+// escape sequence: its scheme must be http or https, and it must not
+// contain a byte that could let hub-provided text (a draft or theme URL is
+// never typed by stellar itself) break out of the escape sequence or smuggle
+// control characters into the terminal - any C0 control (including the
+// ESC/0x1b that starts the very sequence we're building) or DEL.
+func isSafeHyperlinkURL(rawURL string) bool {
+	for _, r := range rawURL {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	scheme := strings.ToLower(u.Scheme)
+	return scheme == "http" || scheme == "https"
 }
 
 const (

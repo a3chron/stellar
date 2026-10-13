@@ -160,9 +160,20 @@ var applyCmd = &cobra.Command{
 			} else {
 				// Check online for latest version (first download or --update)
 				info, infoErr := client.GetThemeInfo(t.Author, t.Name)
+				latestVersion := ""
 				if infoErr == nil && len(info.Versions) > 0 {
+					latestVersion = info.Versions[0].Version
+				}
+				// A version string that reaches CachePath/the "Forked from"
+				// header unchecked could contain "../" or a newline - never
+				// trust one from the hub without validating its shape first,
+				// same as fork.go/preview.go.
+				if latestVersion != "" && !theme.IsValidVersion(latestVersion) {
+					infoErr = fmt.Errorf("stellar-hub returned an invalid version %q for %s/%s", latestVersion, t.Author, t.Name)
+					latestVersion = ""
+				}
+				if latestVersion != "" {
 					// Online theme found - use latest version from API
-					latestVersion := info.Versions[0].Version
 
 					// If updating, report whether a newer version is actually
 					// available - staying silent either way used to leave

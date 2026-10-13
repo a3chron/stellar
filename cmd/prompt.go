@@ -116,13 +116,24 @@ func promptSelect(r *bufio.Reader, prompt string, options []string, defaultIndex
 	return n - 1, nil
 }
 
-// promptYesNo asks a yes/no question. When hasDefault is true, a blank
-// answer (or EOF with nothing typed) returns def; otherwise it's
-// noAnswerError(flagHint). Any other non-"y"/"yes" answer is a plain "no",
-// matching promptConfirmation's convention elsewhere in this package.
-func promptYesNo(r *bufio.Reader, prompt string, hasDefault, def bool, flagHint string) (bool, error) {
+// promptYesNo asks a yes/no question, showing def as the bracketed default
+// ("[Y/n]" or "[y/N]") exactly like a real terminal prompt would - which
+// means a blank line (the user just pressing Enter) always returns def,
+// never an error, as long as someone could plausibly have answered at all.
+//
+// The only case treated as "no answer" is stdin hitting EOF with absolutely
+// nothing read AND tty being false (a genuinely non-interactive stdin -
+// `</dev/null`, a detached CI run, a script that forgot to pipe an answer
+// in): there is nobody there to even see the bracketed default, so the
+// caller is told to pass flagHint instead of silently assuming it. tty
+// should be the same isTerminal(cmd.InOrStdin()) value the caller already
+// computed once per command - see cmd/publish.go's "interactive" convention.
+//
+// Any other non-"y"/"yes" answer is a plain "no", matching
+// promptConfirmation's convention elsewhere in this package.
+func promptYesNo(r *bufio.Reader, tty bool, prompt string, def bool, flagHint string) (bool, error) {
 	defLabel := "[y/N]"
-	if hasDefault && def {
+	if def {
 		defLabel = "[Y/n]"
 	}
 	fmt.Printf("%s %s: ", prompt, defLabel)
@@ -132,11 +143,11 @@ func promptYesNo(r *bufio.Reader, prompt string, hasDefault, def bool, flagHint 
 		return false, err
 	}
 	trimmed := strings.ToLower(strings.TrimSpace(line))
-	if !ok || trimmed == "" {
-		if hasDefault {
-			return def, nil
+	if trimmed == "" {
+		if !ok && !tty {
+			return false, noAnswerError(flagHint)
 		}
-		return false, noAnswerError(flagHint)
+		return def, nil
 	}
 
 	return trimmed == "y" || trimmed == "yes", nil
