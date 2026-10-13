@@ -159,7 +159,8 @@ func TestE2E_PublishedThenRedownloadedThemeStaysOwn(t *testing.T) {
 
 	out, err := runStellar(t, nil, "clean")
 	require.NoError(t, err)
-	assert.Contains(t, out, "Cache already clean")
+	assert.Contains(t, out, "Nothing to clean")
+	assert.Contains(t, out, "Kept 1 of your own themes")
 	assert.True(t, env.FileExists(path))
 }
 

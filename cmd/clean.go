@@ -74,11 +74,11 @@ remove the currently applied theme.`,
 			return fmt.Errorf("failed to clean cache: %w", err)
 		}
 
+		// Even with nothing to remove, the "kept" lines below still run: they
+		// explain why your own themes are still there.
 		if result.DownloadedRemoved == 0 && result.OwnRemoved == 0 {
-			color.Yellow("Cache already clean")
-			return nil
+			color.Yellow("Nothing to clean")
 		}
-
 		if result.DownloadedRemoved > 0 {
 			color.Green("Removed %d downloaded theme(s)", result.DownloadedRemoved)
 		}

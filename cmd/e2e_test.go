@@ -1176,7 +1176,8 @@ func TestE2E_Clean(t *testing.T) {
 		})
 
 		assert.True(t, env.FileExists(handMadePath))
-		assert.Contains(t, out, "Cache already clean")
+		assert.Contains(t, out, "Nothing to clean")
+		assert.Contains(t, out, "Kept 1 of your own themes")
 	})
 
 	t.Run("Downloaded themes are removed", func(t *testing.T) {
