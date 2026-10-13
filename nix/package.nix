@@ -14,13 +14,13 @@
 
 buildGoModule (finalAttrs: {
   pname = "stellar";
-  version = "1.6.0";
+  version = "1.7.0";
 
   src = fetchFromGitHub {
     owner = "a3chron";
     repo = "stellar";
     tag = "v${finalAttrs.version}";
-    hash = "sha256-IxmTBLnAo3qmMIY2kzbWSG8W82RWDXmDM2T3jL3WohE=";
+    hash = "sha256-iqY2ilG744Mz8kvWmy/mw+NQcmxqIijE71SbKpKASmM=";
   };
 
   vendorHash = "sha256-fHvoSeRUqDVrKkk7q4wmRTdUXR2JsZRYh9ddHGEmOHs=";
