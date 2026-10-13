@@ -44,6 +44,19 @@ func TestE2E_PublishNewThemeDraft(t *testing.T) {
 	assert.Contains(t, out, "Finish it on the hub")
 }
 
+func TestE2E_PublishPipedStdinNeverPromptsForName(t *testing.T) {
+	// The name prompt is terminal-only: on piped stdin the title-cased slug is
+	// used without reading anything, so input meant for a y/N confirmation can
+	// never end up as the theme's name.
+	env, mockAPI := setupPublishEnv(t)
+	path := env.CreateThemeFile("testuser", "my-theme", "1.0", testutil.SampleTOML())
+
+	out, err := runStellar(t, strings.NewReader("y\n"), "publish", path)
+	require.NoError(t, err)
+	assert.NotContains(t, out, "Theme name")
+	assert.Equal(t, []string{"My Theme"}, mockAPI.DraftNames("testuser"))
+}
+
 func TestE2E_PublishNewVersionDraft(t *testing.T) {
 	env, mockAPI := setupPublishEnv(t)
 	mockAPI.AddTheme(testutil.MockTheme{

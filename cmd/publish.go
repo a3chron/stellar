@@ -879,14 +879,15 @@ func resolveOrCreateDraft(r *bufio.Reader, tty bool, client *api.Client, me *api
 
 	name := publishName
 	if name == "" {
-		// promptText already falls back to def (the title-cased slug) on a
-		// missing/blank answer regardless of whether stdin is a terminal -
-		// matching "a prompt with a title-cased default, else (no TTY) the
-		// title-cased slug" without a separate non-interactive branch.
-		def := titleCase(slug)
-		name, err = promptText(r, "Theme name", def, "--name <name>")
-		if err != nil {
-			return nil, err
+		// Only asked on a terminal. Piped stdin is reserved for the y/N
+		// confirmations (`echo y | stellar publish …`), and reading a name from
+		// it would swallow that answer as the theme's name.
+		name = titleCase(slug)
+		if tty {
+			name, err = promptText(r, "Theme name", name, "--name <name>")
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	req.Name = &name

@@ -831,3 +831,23 @@ func (h *MockAPIHandler) DraftCount(username string) int {
 	}
 	return n
 }
+
+// DraftNames returns the names of username's live theme drafts (empty for an
+// unnamed one), in no particular order.
+func (h *MockAPIHandler) DraftNames(username string) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	var names []string
+	for _, d := range h.drafts {
+		if d.owner != username || d.kind != "theme" {
+			continue
+		}
+		name := ""
+		if d.name != nil {
+			name = *d.name
+		}
+		names = append(names, name)
+	}
+	return names
+}
