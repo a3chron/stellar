@@ -60,11 +60,8 @@ func wrapHubAPIError(err error) error {
 	if errors.Is(err, api.ErrHubTooOld) {
 		base := paths.APIURL(api.BaseURL)
 		return newHintedError(err.Error(), hint{
-			label: "Hint",
-			values: []string{
-				"ask the hub owner to update it",
-				fmt.Sprintf("or publish at %s/upload for now", base),
-			},
+			label:  "Hint",
+			values: []string{fmt.Sprintf("publish on the web for now: %s/upload", base)},
 		})
 	}
 	if errors.Is(err, api.ErrUnauthorized) {
@@ -103,6 +100,22 @@ func wrapHubAPIError(err error) error {
 				label:  "Hint",
 				values: []string{fmt.Sprintf("finish or delete some drafts at %s/settings#drafts, then try again", base)},
 			})
+		case "version_not_newer":
+			if next := suggestNextVersion(latestVersionFromDetails(apiErr.Details)); next != "" {
+				return newHintedError(apiErr.Error(), hint{
+					label:  "Hint",
+					values: []string{fmt.Sprintf("pick a newer one, e.g. --version %s", next)},
+				})
+			}
+			return newHintedError(apiErr.Error(), hint{
+				label:  "Hint",
+				values: []string{"pick a newer one with --version"},
+			})
+		case "draft_not_found":
+			return newHintedError(apiErr.Error(), hint{
+				label:  "Hint",
+				values: []string{"run without --draft to start a new draft"},
+			})
 		case "theme_not_found":
 			return newHintedError(apiErr.Error(), hint{
 				label:  "Hint",
@@ -129,4 +142,19 @@ func existingDraftCodeFromDetails(details json.RawMessage) string {
 		return ""
 	}
 	return parsed.Code
+}
+
+// latestVersionFromDetails extracts the "latest" field a version_not_newer
+// error's details carry - best-effort, "" when it isn't there.
+func latestVersionFromDetails(details json.RawMessage) string {
+	if len(details) == 0 {
+		return ""
+	}
+	var parsed struct {
+		Latest string `json:"latest"`
+	}
+	if err := json.Unmarshal(details, &parsed); err != nil {
+		return ""
+	}
+	return parsed.Latest
 }

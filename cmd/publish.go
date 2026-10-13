@@ -778,9 +778,9 @@ func maxThemeVersion(versions []api.VersionInfo) string {
 }
 
 // suggestNextVersion returns a sensible default for the version prompt when
-// a version draft is missing one: the latest published version with its
-// minor component bumped by one (mirroring how the hub itself defaults a
-// new version draft's version field), e.g. "1.2" -> "1.3". Returns "" for
+// a version draft is missing one: the next major after the latest published
+// version, e.g. "1.2" -> "2.0" - the same default the hub gives a new
+// version draft (and what the docs promise: "1.4 becomes 2.0"). Returns "" for
 // anything it can't parse as "X.Y" (including an empty latest - a draft for
 // a theme with no versions yet, or a hub that didn't send one), which
 // promptText then treats as "no default" rather than offering a bogus one.
@@ -789,14 +789,14 @@ func suggestNextVersion(latest string) string {
 	if !ok {
 		return ""
 	}
-	n, err := strconv.Atoi(minor)
+	if _, err := strconv.Atoi(minor); err != nil {
+		return ""
+	}
+	n, err := strconv.Atoi(major)
 	if err != nil {
 		return ""
 	}
-	if _, err := strconv.Atoi(major); err != nil {
-		return ""
-	}
-	return fmt.Sprintf("%s.%d", major, n+1)
+	return fmt.Sprintf("%d.0", n+1)
 }
 
 // titleCase turns a slug ("my-cool-theme") into a readable default display

@@ -95,11 +95,11 @@ func TestWrapHubAPIError_CommonCodesGetHints(t *testing.T) {
 	})
 }
 
-// TestWrapHubAPIError_HubTooOldHintIsTwoItems guards review item 10: the
-// hub-too-old hint used to be one run-on sentence ("ask the hub owner to
-// update it, or publish at ... for now"); it now renders as two separate
-// list items under one "Hint:" label, matching how a multi-option hint
-// renders everywhere else in the CLI (e.g. "Did you mean").
+// TestWrapHubAPIError_HubTooOldPointsAtTheWebUpload guards review item 10:
+// the hub-too-old hint is one short pointer to the web upload on the actual
+// base URL - not a run-on sentence, and not "ask the hub owner" (for the
+// official hub, that's the person who'd ship the update anyway).
+//
 // fakeHubTooOldError satisfies errors.Is(err, api.ErrHubTooOld) without
 // needing api's own unexported hubTooOldError type (used by the real client
 // when a pre-upgrade hub deployment is detected - see TestE2E_AuthHubTooOld
@@ -112,17 +112,49 @@ func (e *fakeHubTooOldError) Error() string {
 
 func (e *fakeHubTooOldError) Is(target error) bool { return target == api.ErrHubTooOld }
 
-func TestWrapHubAPIError_HubTooOldHintIsTwoItems(t *testing.T) {
+func TestWrapHubAPIError_HubTooOldPointsAtTheWebUpload(t *testing.T) {
 	orig := &fakeHubTooOldError{baseURL: "https://stellar.example"}
 	err := wrapHubAPIError(orig)
 	require.Error(t, err)
 	var he *hintedError
 	require.ErrorAs(t, err, &he)
 	require.Len(t, he.hints, 1)
-	require.Len(t, he.hints[0].values, 2)
-	assert.Equal(t, "ask the hub owner to update it", he.hints[0].values[0])
-	assert.Contains(t, he.hints[0].values[1], "or publish at")
-	assert.Contains(t, he.hints[0].values[1], "/upload for now")
+	require.Len(t, he.hints[0].values, 1)
+	assert.Contains(t, he.hints[0].values[0], "publish on the web for now: ")
+	assert.Contains(t, he.hints[0].values[0], "/upload")
+}
+
+func TestWrapHubAPIError_VersionAndDraftHints(t *testing.T) {
+	t.Run("version_not_newer suggests the next version after latest", func(t *testing.T) {
+		details, derr := json.Marshal(map[string]string{"latest": "1.4"})
+		require.NoError(t, derr)
+		err := wrapHubAPIError(&api.APIError{
+			Status:  http.StatusBadRequest,
+			Code:    "version_not_newer",
+			Message: "Version 1.2 isn't newer than the latest version 1.4",
+			Details: details,
+		})
+		var he *hintedError
+		require.ErrorAs(t, err, &he)
+		require.Len(t, he.hints, 1)
+		assert.Contains(t, he.hints[0].values[0], "--version 2.0")
+	})
+
+	t.Run("version_not_newer without details still names the flag", func(t *testing.T) {
+		err := wrapHubAPIError(&api.APIError{Status: http.StatusBadRequest, Code: "version_not_newer", Message: "not newer"})
+		var he *hintedError
+		require.ErrorAs(t, err, &he)
+		require.Len(t, he.hints, 1)
+		assert.Contains(t, he.hints[0].values[0], "--version")
+	})
+
+	t.Run("draft_not_found suggests starting a new draft", func(t *testing.T) {
+		err := wrapHubAPIError(&api.APIError{Status: http.StatusNotFound, Code: "draft_not_found", Message: "Draft not found"})
+		var he *hintedError
+		require.ErrorAs(t, err, &he)
+		require.Len(t, he.hints, 1)
+		assert.Contains(t, he.hints[0].values[0], "without --draft")
+	})
 }
 
 func TestExistingDraftCodeFromDetails(t *testing.T) {

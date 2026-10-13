@@ -19,8 +19,9 @@ func TestSuggestNextVersion(t *testing.T) {
 		latest string
 		want   string
 	}{
-		{"bumps the minor component", "1.2", "1.3"},
-		{"bumps from zero", "2.0", "2.1"},
+		{"bumps to the next major, like the hub", "1.2", "2.0"},
+		{"from a .0 version", "2.0", "3.0"},
+		{"double-digit minor", "1.10", "2.0"},
 		{"empty latest has no default", "", ""},
 		{"non-numeric major", "a.2", ""},
 		{"non-numeric minor", "1.b", ""},
