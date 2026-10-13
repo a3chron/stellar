@@ -5,7 +5,6 @@ package cmd
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 
@@ -17,6 +16,8 @@ import (
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
+
+var forkForce bool
 
 var forkCmd = &cobra.Command{
 	Use:   "fork <author/slug[@version]> [[author/]name]",
@@ -33,6 +34,9 @@ Without a destination name, the theme keeps its slug under your logged-in
   stellar fork a3chron/ctp-blue a3chron/my-blue`,
 	Args: argsWithUsage(cobra.RangeArgs(1, 2)),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		r := newPromptReader(cmd)
+		tty := isTerminal(cmd.InOrStdin())
+
 		t, err := theme.ParseIdentifier(args[0])
 		if err != nil {
 			return err
@@ -45,6 +49,9 @@ Without a destination name, the theme keeps its slug under your logged-in
 				return err
 			}
 		}
+		if name == theme.BackupThemeName {
+			return fmt.Errorf("%q is reserved for stellar's own config backups - pick another name", name)
+		}
 
 		destPath, err := paths.ThemeCachePath(author, name, "1.0")
 		if err != nil {
@@ -54,32 +61,52 @@ Without a destination name, the theme keeps its slug under your logged-in
 			return err
 		}
 
+		// Unlike the usual "config.Load() failed -> use an empty Config"
+		// fallback elsewhere, a failure here must not proceed to Save()
+		// later: an empty *Config saved over a config.json that merely
+		// failed to *read* would silently wipe the user's real
+		// current/downloaded-theme state.
 		cfg, err := config.Load()
 		if err != nil {
-			cfg = &config.Config{}
+			return fmt.Errorf("couldn't load config.json: %w", err)
 		}
 
 		client := api.NewClient()
 
-		// Resolve the version exactly like "stellar apply" does.
+		// Resolve the version hub-first, exactly as documented (README:
+		// "Fetches from stellar-hub first ... falling back to your local
+		// cache if the hub can't be reached") - preferring any cached copy
+		// first, as an earlier version of this did, could silently fork a
+		// stale version even when the hub has a newer one and is perfectly
+		// reachable.
 		if t.NeedsVersionResolution() {
-			themeDir, _ := t.CacheDir()
-			localVer, localErr := theme.FindLatestLocalVersion(themeDir)
-			hasLocalCache := localErr == nil
+			info, infoErr := client.GetThemeInfo(t.Author, t.Name)
+			latestVersion := ""
+			if infoErr == nil && len(info.Versions) > 0 {
+				// The numeric maximum, per the contract's definition of
+				// "latest" - not whichever entry the hub happens to list
+				// first.
+				latestVersion = maxThemeVersion(info.Versions)
+			}
+			// Never trust a version string from the hub unchecked: it ends
+			// up in a cache file path (CachePath) and in the "Forked from"
+			// header below - "../" or an embedded newline must not reach
+			// either.
+			if latestVersion != "" && !theme.IsValidVersion(latestVersion) {
+				infoErr = fmt.Errorf("stellar-hub returned an invalid version %q for %s/%s", latestVersion, t.Author, t.Name)
+				latestVersion = ""
+			}
 
-			if hasLocalCache && localVer != theme.LatestVersion {
-				t.Version = localVer
+			if latestVersion != "" {
+				t.Version = latestVersion
 			} else {
-				info, infoErr := client.GetThemeInfo(t.Author, t.Name)
-				if infoErr == nil && len(info.Versions) > 0 {
-					t.Version = info.Versions[0].Version
-				} else {
-					if !hasLocalCache {
-						return hubUnreachableError(t, infoErr)
-					}
-					t.Version = localVer
-					color.HiBlack("%s", hubUnavailableNotice(t, infoErr))
+				themeDir, _ := t.CacheDir()
+				localVer, localErr := theme.FindLatestLocalVersion(themeDir)
+				if localErr != nil {
+					return hubUnreachableError(t, infoErr)
 				}
+				t.Version = localVer
+				color.HiBlack("%s", hubUnavailableNotice(t, infoErr))
 			}
 		}
 
@@ -113,8 +140,21 @@ Without a destination name, the theme keeps its slug under your logged-in
 		if !validationResult.Valid {
 			return fmt.Errorf("invalid config: %w", validationResult.Error)
 		}
-		if validationResult.HasCustomCommands {
-			color.Yellow("[custom] notice: this theme runs shell commands - anyone who applies your fork will see a security warning.")
+
+		// fork writes the content straight into a theme the user now owns,
+		// and "stellar apply" never re-prompts for a theme that's already on
+		// disk - so this is the only chance to warn about [custom] commands
+		// before they become silently trusted local content. Declining
+		// aborts and writes nothing.
+		if validationResult.HasCustomCommands && !forkForce {
+			printCustomCommandWarning(t, "")
+			ok, cerr := promptYesNo(r, tty, "Do you trust this theme and want to fork it?", false, "--force")
+			if cerr != nil {
+				return fmt.Errorf("fork aborted: %w", cerr)
+			}
+			if !ok {
+				return fmt.Errorf("aborted: theme was not forked")
+			}
 		}
 
 		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
@@ -128,12 +168,16 @@ Without a destination name, the theme keeps its slug under your logged-in
 		}
 
 		// Only count a download for content that was actually fetched from
-		// the hub just now, and only once per theme - reusing an
-		// already-cached copy, or forking a theme forked/applied before,
-		// must not inflate the count.
-		if fetched && !cfg.HasDownloaded(themeID) {
-			if ierr := client.IncrementDownloadCount(t.Author, t.Name); ierr != nil {
-				log.Printf("download count failed: %v", ierr)
+		// the hub just now - reusing an already-cached copy must not inflate
+		// anything. The hub's public counter is skipped for dev builds
+		// (IsDev), same as apply; the local "you have this" bookkeeping
+		// still happens regardless, so `stellar clean` treats it as a plain,
+		// re-fetchable download rather than an untracked/"own" theme.
+		if fetched {
+			if !IsDev() && !cfg.HasDownloaded(themeID) {
+				if ierr := client.IncrementDownloadCount(t.Author, t.Name); ierr != nil {
+					color.HiBlack("download count failed: %v", ierr)
+				}
 			}
 			cfg.MarkDownloaded(themeID)
 		}
@@ -155,5 +199,6 @@ Without a destination name, the theme keeps its slug under your logged-in
 }
 
 func init() {
+	forkCmd.Flags().BoolVarP(&forkForce, "force", "f", false, "Skip the [custom]-command confirmation when forking a theme that runs shell commands")
 	forkCmd.ValidArgsFunction = themeIdentifierArgs
 }

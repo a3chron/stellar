@@ -58,7 +58,8 @@ remove the currently applied theme.`,
 			for _, ot := range plan.OwnThemes {
 				fmt.Printf("  %s (%d version(s))\n", ot.ID, ot.Versions)
 			}
-			ok, cerr := promptYesNo(newPromptReader(cmd), "Remove these too?", false, false, "--yes")
+			tty := isTerminal(cmd.InOrStdin())
+			ok, cerr := promptYesNo(newPromptReader(cmd), tty, "Remove these too?", false, "--yes")
 			if cerr != nil {
 				return cerr
 			}

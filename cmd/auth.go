@@ -60,7 +60,11 @@ func loginLabel(name, username string) string {
 func cacheUsername(username string) {
 	cfg, err := config.Load()
 	if err != nil {
-		cfg = &config.Config{}
+		// Don't save a fresh empty config over one we merely failed to read -
+		// that would silently wipe currentTheme/authoredThemes/downloaded.
+		// Caching the username is purely a convenience, so just warn.
+		color.Yellow("Warning: couldn't cache your username: %v", err)
+		return
 	}
 	if cfg.Username == username {
 		return

@@ -4,6 +4,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/a3chron/stellar/internal/config"
@@ -56,6 +57,7 @@ func TestE2E_Fork(t *testing.T) {
 	t.Run("forks a hub theme with a header and counts a download once", func(t *testing.T) {
 		env := testutil.SetupTestEnv(t)
 		resetFlags()
+		pinVersion(t, "1.2.3") // IncrementDownloadCount is skipped for dev builds, like apply
 		mockAPI := testutil.CreateDefaultMockAPI()
 		env.SetupMockAPI(mockAPI)
 		env.CreateConfig(`{"username": "me"}`)
@@ -77,6 +79,24 @@ func TestE2E_Fork(t *testing.T) {
 		require.NoError(t, cerr)
 		assert.True(t, cfg.HasAuthored("me/my-blue"))
 		assert.True(t, cfg.HasDownloaded("testuser/sample-theme"))
+	})
+
+	t.Run("a dev build does not increment the hub's download count", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags() // dev build: versionInfo.version defaults to "dev", so IsDev() is true
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+		env.CreateConfig(`{"username": "me"}`)
+		before := mockAPI.GetDownloadCount("testuser", "sample-theme")
+
+		_, err := runStellar(t, nil, "fork", "testuser/sample-theme@1.2", "my-blue-dev")
+		require.NoError(t, err)
+
+		assert.Equal(t, before, mockAPI.GetDownloadCount("testuser", "sample-theme"), "a dev build must not inflate the public download count")
+
+		cfg, cerr := config.Load()
+		require.NoError(t, cerr)
+		assert.True(t, cfg.HasDownloaded("testuser/sample-theme"), "local bookkeeping still happens regardless of IsDev")
 	})
 
 	t.Run("does not double-count a download for an already-downloaded theme", func(t *testing.T) {
@@ -217,6 +237,142 @@ func TestE2E_NewAndForkLeaveExistingThemeFoldersAlone(t *testing.T) {
 		assert.Equal(t, own, env.ReadFile(filepath.Join(dir, "2.0.toml")))
 		// Refused before downloading anything.
 		assert.Equal(t, before, mockAPI.GetDownloadCount("testuser", "sample-theme"))
+	})
+}
+
+// TestE2E_ForkSecurityGate guards review item 1: fork writes downloaded
+// content as the user's own theme, and `apply` never re-prompts for a theme
+// already on disk - so fork's own [custom]-command confirmation is the only
+// chance to warn before that content becomes silently trusted.
+func TestE2E_ForkSecurityGate(t *testing.T) {
+	t.Run("declining aborts and writes nothing", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+		env.CreateConfig(`{"username": "me"}`)
+
+		out, err := runStellar(t, strings.NewReader("n\n"), "fork", "testuser/custom-theme@1.0", "my-custom")
+		require.Error(t, err)
+		assert.Contains(t, out, "SECURITY WARNING")
+		assert.Contains(t, out, "Community themes aren't reviewed")
+
+		destPath := filepath.Join(env.StellarDir, "me", "my-custom", "1.0.toml")
+		assert.False(t, env.FileExists(destPath), "declining must write nothing")
+	})
+
+	t.Run("accepting via a piped y forks it", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+		env.CreateConfig(`{"username": "me"}`)
+
+		_, err := runStellar(t, strings.NewReader("y\n"), "fork", "testuser/custom-theme@1.0", "my-custom")
+		require.NoError(t, err)
+
+		destPath := filepath.Join(env.StellarDir, "me", "my-custom", "1.0.toml")
+		assert.True(t, env.FileExists(destPath))
+	})
+
+	t.Run("--force skips the prompt entirely", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+		env.CreateConfig(`{"username": "me"}`)
+
+		out, err := runStellar(t, nil, "fork", "testuser/custom-theme@1.0", "my-custom", "--force")
+		require.NoError(t, err)
+		assert.NotContains(t, out, "SECURITY WARNING")
+
+		destPath := filepath.Join(env.StellarDir, "me", "my-custom", "1.0.toml")
+		assert.True(t, env.FileExists(destPath))
+	})
+
+	t.Run("EOF on a non-TTY without --force errors naming --force", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+		env.CreateConfig(`{"username": "me"}`)
+
+		_, err := runStellar(t, pipeStdin(t), "fork", "testuser/custom-theme@1.0", "my-custom")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "--force")
+
+		destPath := filepath.Join(env.StellarDir, "me", "my-custom", "1.0.toml")
+		assert.False(t, env.FileExists(destPath))
+	})
+
+	t.Run("a theme without custom commands never shows the warning", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+		env.CreateConfig(`{"username": "me"}`)
+
+		out, err := runStellar(t, nil, "fork", "testuser/sample-theme@1.2", "my-blue")
+		require.NoError(t, err)
+		assert.NotContains(t, out, "SECURITY WARNING")
+	})
+}
+
+// TestE2E_NewAndForkRefuseBackupName guards review item 21: "backup" is
+// reserved for config backups and must never be usable as a new/fork
+// destination name.
+func TestE2E_NewAndForkRefuseBackupName(t *testing.T) {
+	t.Run("new", func(t *testing.T) {
+		testutil.SetupTestEnv(t)
+		resetFlags()
+
+		_, err := runStellar(t, nil, "new", "me/backup")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "backup")
+	})
+
+	t.Run("fork", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+		env.CreateConfig(`{"username": "me"}`)
+
+		_, err := runStellar(t, nil, "fork", "testuser/sample-theme@1.2", "me/backup")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "backup")
+	})
+}
+
+// TestE2E_NewAndFork_ConfigLoadErrorDoesNotWipeIt guards review item 23: a
+// config.json that merely fails to *read* (corrupt JSON here) must never be
+// silently replaced by an empty one - that would wipe out the user's real
+// current/downloaded-theme state.
+func TestE2E_NewAndFork_ConfigLoadErrorDoesNotWipeIt(t *testing.T) {
+	t.Run("new", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		env.CreateConfig(`{not valid json`)
+
+		_, err := runStellar(t, nil, "new", "me/my-theme")
+		require.Error(t, err)
+
+		raw := env.ReadFile(filepath.Join(env.StellarDir, "config.json"))
+		assert.Equal(t, `{not valid json`, raw, "the corrupt config.json must be left exactly as it was, not overwritten with an empty one")
+	})
+
+	t.Run("fork", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+		env.CreateConfig(`{not valid json`)
+
+		_, err := runStellar(t, nil, "fork", "testuser/sample-theme@1.2", "me/my-blue")
+		require.Error(t, err)
+
+		raw := env.ReadFile(filepath.Join(env.StellarDir, "config.json"))
+		assert.Equal(t, `{not valid json`, raw)
 	})
 }
 

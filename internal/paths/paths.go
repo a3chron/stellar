@@ -5,6 +5,7 @@ package paths
 import (
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Environment variable names for path overrides
@@ -71,12 +72,18 @@ func TmpDir() string {
 }
 
 // APIURL returns the API base URL.
-// Returns STELLAR_API_URL env var if set, otherwise the default production URL
+// Returns STELLAR_API_URL env var if set, otherwise the default production URL.
+//
+// Any trailing slash is trimmed: every call site appends its own leading
+// "/api/...", so an env var like "http://127.0.0.1:3000/" would otherwise
+// produce "http://127.0.0.1:3000//api/..." - a double slash Next.js answers
+// with a 308 redirect, which the authed client's no-redirect policy then
+// reports as a bare request failure instead of ever reaching the route.
 func APIURL(defaultURL string) string {
 	if envURL := os.Getenv(EnvAPIURL); envURL != "" {
-		return envURL
+		return strings.TrimRight(envURL, "/")
 	}
-	return defaultURL
+	return strings.TrimRight(defaultURL, "/")
 }
 
 // ConfigPath returns the path to config.json within the stellar home directory

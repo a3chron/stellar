@@ -9,6 +9,7 @@ import (
 
 	"github.com/a3chron/stellar/internal/config"
 	"github.com/a3chron/stellar/internal/paths"
+	"github.com/a3chron/stellar/internal/theme"
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
@@ -41,6 +42,9 @@ Without an author prefix, the theme is created under your logged-in username
 		if err != nil {
 			return err
 		}
+		if name == theme.BackupThemeName {
+			return fmt.Errorf("%q is reserved for stellar's own config backups - pick another name", name)
+		}
 
 		path, err := paths.ThemeCachePath(author, name, "1.0")
 		if err != nil {
@@ -61,9 +65,15 @@ Without an author prefix, the theme is created under your logged-in username
 			return err
 		}
 
+		// Unlike the usual "config.Load() failed -> use an empty Config"
+		// fallback elsewhere, a failure here must not proceed to Save(): an
+		// empty *Config saved over a config.json that merely failed to
+		// *read* (corrupt JSON, a permissions blip) would silently wipe out
+		// the user's real current/downloaded-theme state. The theme file
+		// itself is already written at this point regardless.
 		cfg, err := config.Load()
 		if err != nil {
-			cfg = &config.Config{}
+			return fmt.Errorf("created %s, but couldn't update config.json to record it as authored: %w", identifier, err)
 		}
 		cfg.MarkAuthored(identifier)
 		if err := cfg.Save(); err != nil {

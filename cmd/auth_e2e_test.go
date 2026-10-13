@@ -156,6 +156,28 @@ func TestE2E_AuthLogin(t *testing.T) {
 		assert.Contains(t, out, "STELLAR_TOKEN")
 		assert.Contains(t, out, "takes precedence")
 	})
+
+	// Review item 23: cacheUsername must not save a fresh empty config over
+	// one that merely failed to *read* (corrupt JSON here) - that would
+	// silently wipe out the user's real current/downloaded-theme state. It's
+	// best-effort, so login itself still succeeds; it just warns instead.
+	t.Run("corrupt config.json does not get wiped by cacheUsername", func(t *testing.T) {
+		env := testutil.SetupTestEnv(t)
+		resetFlags()
+		stubAuthSleep(t)
+		mockAPI := testutil.CreateDefaultMockAPI()
+		env.SetupMockAPI(mockAPI)
+		mockAPI.SetNextAuthApprove(1, "testuser", "Test User")
+		env.CreateConfig(`{not valid json`)
+
+		out, err := runStellar(t, nil, "auth", "--no-browser")
+		require.NoError(t, err)
+		assert.Contains(t, out, "Logged in as")
+		assert.Contains(t, out, "couldn't cache your username")
+
+		raw := env.ReadFile(filepath.Join(env.StellarDir, "config.json"))
+		assert.Equal(t, `{not valid json`, raw, "the corrupt config.json must be left exactly as it was, not overwritten with an empty one")
+	})
 }
 
 func TestE2E_AuthStatus(t *testing.T) {
